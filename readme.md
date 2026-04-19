@@ -1,4 +1,5 @@
 Siya Goel
+Medhya Goel
 
 ## Image chatbot prototype
 
