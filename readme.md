@@ -1,5 +1,6 @@
 Siya Goel
 Medhya Goel
+Andreas Lorgen
 
 ## Image chatbot prototype
 
