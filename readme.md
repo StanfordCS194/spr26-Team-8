@@ -1,6 +1,7 @@
 Siya Goel
 Medhya Goel
 Andreas Lorgen
+J Yim
 
 ## Image chatbot prototype
 
