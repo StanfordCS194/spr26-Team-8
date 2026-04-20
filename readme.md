@@ -20,3 +20,33 @@ This branch includes an initial image-aware chatbot app.
 - Upload one or more images.
 - Ask natural-language questions about those uploaded images.
 - Returns an answer grounded in the visible content (or says when evidence is uncertain).
+
+---
+
+## Venn mobile app (Expo)
+
+This repo also contains a **React Native (Expo Router)** client under `app/`. It does **not** replace the Streamlit prototype above; they are separate entrypoints.
+
+### Run locally
+
+1. Use **Node 20+** (see `package.json` `engines` and optional `.nvmrc`).
+2. `npm install`
+3. `npm start`, then open in **Expo Go**, or press `i` / `a` / `w` for simulator / web.
+
+### Archive search (what it does right now)
+
+Search and light “clustering” for the **Archive** tab live in `lib/archiveSearchAndCluster.ts`. Data is **on-device** unless teammates wire the placeholders.
+
+| Piece | Behavior |
+| ----- | -------- |
+| **Index** | Bundled images in `assets/files` plus user uploads copied under the app document directory. |
+| **Query** | Query string is **tokenized**; **every** token must appear somewhere in the item’s `searchBlob` (AND semantics), not one long substring. |
+| **searchBlob** | Lowercased join of id, file name, auto-tags, theme, and optional supplemental text (for future OCR/captions). |
+| **Auto-tags** | Inferred from the file name (with stopwords); stored in `venn-archive-item-meta.json`. |
+| **Theme chips** | Coarse keyword buckets (e.g. food, travel)—**not** embedding-based clusters. |
+| **Ranking** | Among matches, **file name** and **tag** hits score above weak blob-only hits; sort by score, then file name. |
+| **Match hints** | While searching, a tile may show short labels (e.g. “File name”, “Tag”) for transparency. |
+| **Vision / OCR** | Off by default. When enabled, text from `placeholder_extractSearchableTextFromImage` merges into the same index via `lib/archiveSupplementalSearchText.ts`. |
+| **Backend** | `lib/teamIntegrationPlaceholders.ts` defines no-op hooks for Supabase tags, embedding themes, index push, chat, and vision—flip flags and implement when ready. |
+
+The **Action** tab is a **placeholder** chat UI for future generative features; it does not use `chatbot_app.py`.
