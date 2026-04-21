@@ -18,7 +18,7 @@ import {
 import * as FileSystem from "expo-file-system/legacy";
 import * as ImagePicker from "expo-image-picker";
 import { useEffect, useMemo, useState } from "react";
-import { Alert, Image, Pressable, ScrollView, Text, TextInput, View } from "react-native";
+import { Alert, Image, Modal, Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import type { ImageSourcePropType } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
@@ -67,6 +67,7 @@ export default function ArchiveTab() {
   const [searchQuery, setSearchQuery] = useState("");
   const [themeFilter, setThemeFilter] = useState<"all" | string>("all");
   const [supplementalSearchById, setSupplementalSearchById] = useState<Record<string, string>>({});
+  const [selectedItem, setSelectedItem] = useState<BoardItem | null>(null);
 
   useEffect(() => {
     void loadSupplementalSearchText().then(setSupplementalSearchById);
@@ -323,7 +324,7 @@ export default function ArchiveTab() {
           <View className="mt-5 flex-row gap-3">
             <View className="flex-1 gap-3">
               {leftColumnCells.map(({ item, highlights }) => (
-                <View key={item.id} className="overflow-hidden rounded-2xl bg-gray-100">
+                <Pressable key={item.id} onPress={() => setSelectedItem(item)} className="overflow-hidden rounded-2xl bg-gray-100">
                   <Image
                     source={item.source}
                     style={{ width: "100%", height: item.height }}
@@ -342,13 +343,13 @@ export default function ArchiveTab() {
                       ))}
                     </View>
                   ) : null}
-                </View>
+                </Pressable>
               ))}
             </View>
 
             <View className="flex-1 gap-3">
               {rightColumnCells.map(({ item, highlights }) => (
-                <View key={item.id} className="overflow-hidden rounded-2xl bg-gray-100">
+                <Pressable key={item.id} onPress={() => setSelectedItem(item)} className="overflow-hidden rounded-2xl bg-gray-100">
                   <Image
                     source={item.source}
                     style={{ width: "100%", height: item.height }}
@@ -367,11 +368,23 @@ export default function ArchiveTab() {
                       ))}
                     </View>
                   ) : null}
-                </View>
+                </Pressable>
               ))}
             </View>
           </View>
         </ScrollView>
+
+        <Modal visible={!!selectedItem} transparent animationType="fade" onRequestClose={() => setSelectedItem(null)}>
+          <Pressable className="flex-1 items-center justify-center bg-black/60" onPress={() => setSelectedItem(null)}>
+            {selectedItem ? (
+              <Image
+                source={selectedItem.source}
+                style={{ width: "85%", height: "70%", borderRadius: 16 }}
+                resizeMode="contain"
+              />
+            ) : null}
+          </Pressable>
+        </Modal>
       </SafeAreaView>
     </View>
   );
