@@ -1,15 +1,24 @@
 import { router } from "expo-router";
+import { useAuth } from "@/lib/auth";
 import { useEffect } from "react";
 import { ActivityIndicator, Text, View } from "react-native";
 
 export default function Index() {
+  const { session, isLoading } = useAuth();
+
   useEffect(() => {
+    if (isLoading) return;
+
     const timeoutId = setTimeout(() => {
-      router.replace("/(tabs)/archive");
+      if (session) {
+        router.replace("/(tabs)/archive");
+      } else {
+        router.replace("/auth");
+      }
     }, 900);
 
     return () => clearTimeout(timeoutId);
-  }, []);
+  }, [isLoading, session]);
 
   return (
     <View className="flex-1 items-center justify-center bg-white">
