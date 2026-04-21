@@ -19,19 +19,10 @@ import { supabase } from "@/lib/supabase";
 import { decode } from "base64-arraybuffer";
 import * as FileSystem from "expo-file-system/legacy";
 import * as ImagePicker from "expo-image-picker";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Alert, Image, Modal, Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import type { ImageSourcePropType } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-
-type ContextModule = {
-  keys: () => string[];
-  (id: string): number;
-};
-
-type RequireWithContext = NodeRequire & {
-  context: (path: string, recursive?: boolean, filter?: RegExp) => ContextModule;
-};
 
 const imageHeights = [220, 280, 200, 260];
 
@@ -46,23 +37,13 @@ type GridCell = {
   highlights: ArchiveSearchMatchHighlight[];
 };
 
-const imagesContext = (require as RequireWithContext).context(
-  "../../assets/files",
-  false,
-  /\.(png|jpe?g|webp|gif)$/i
-);
-
-const bundledItems: BoardItem[] = imagesContext
-  .keys()
-  .sort((a, b) => a.localeCompare(b))
-  .map((key, index) => ({
-    id: key,
-    source: imagesContext(key),
-    height: imageHeights[index % imageHeights.length],
-  }));
+type MemoryFileRow = {
+  memory_id: string;
+  files: { storage_path: string } | { storage_path: string }[] | null;
+};
 
 export default function ArchiveTab() {
-  const [uploadedItems, setUploadedItems] = useState<BoardItem[]>([]);
+  const [items, setItems] = useState<BoardItem[]>([]);
   const [meta, setMeta] = useState<Record<string, ArchiveItemMeta>>({});
   const [themeOverrides, setThemeOverrides] = useState<Record<string, string>>({});
   const [searchQuery, setSearchQuery] = useState("");
@@ -74,13 +55,52 @@ export default function ArchiveTab() {
     void loadSupplementalSearchText().then(setSupplementalSearchById);
   }, []);
 
-  const boardItems = useMemo(
-    () => [...bundledItems, ...uploadedItems],
-    [uploadedItems]
-  );
+  const loadItems = useCallback(async () => {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return setItems([]);
+
+    const { data } = await supabase
+      .from("memories")
+      .select("memory_id, files(storage_path)")
+      .eq("user_id", user.id)
+      .not("file_id", "is", null)
+      .order("memory_id", { ascending: true });
+
+    const entries = ((data as MemoryFileRow[] | null) ?? []).flatMap((m) => {
+      const file = Array.isArray(m.files) ? m.files[0] : m.files;
+      return file ? [{ memory_id: m.memory_id, storage_path: file.storage_path }] : [];
+    });
+    if (entries.length === 0) return setItems([]);
+
+    const { data: signed } = await supabase.storage
+      .from("memories")
+      .createSignedUrls(entries.map((e) => e.storage_path), 60 * 60);
+
+    setItems(
+      (signed ?? []).flatMap((s, i) =>
+        s.signedUrl
+          ? [{
+              id: `uploaded-${entries[i].memory_id}`,
+              source: { uri: s.signedUrl },
+              height: imageHeights[i % imageHeights.length],
+            }]
+          : []
+      )
+    );
+  }, []);
 
   useEffect(() => {
-    const ids = boardItems.map((item) => ({
+    void loadItems();
+    const { data } = supabase.auth.onAuthStateChange((event) => {
+      if (event === "SIGNED_IN" || event === "SIGNED_OUT" || event === "USER_UPDATED") {
+        void loadItems();
+      }
+    });
+    return () => data.subscription.unsubscribe();
+  }, [loadItems]);
+
+  useEffect(() => {
+    const ids = items.map((item) => ({
       id: item.id,
       fileName: fileNameFromArchiveId(item.id),
     }));
@@ -99,15 +119,15 @@ export default function ArchiveTab() {
     return () => {
       cancelled = true;
     };
-  }, [boardItems]);
+  }, [items]);
 
   const indexRows = useMemo(
     () =>
-      enrichArchiveRows(boardItems.map((b) => b.id), meta, {
+      enrichArchiveRows(items.map((b) => b.id), meta, {
         themeOverrides,
         searchableTextById: supplementalSearchById,
       }),
-    [boardItems, meta, themeOverrides, supplementalSearchById]
+    [items, meta, themeOverrides, supplementalSearchById]
   );
 
   const indexPayload = useMemo(() => archiveIndexForBackend(indexRows), [indexRows]);
@@ -124,8 +144,8 @@ export default function ArchiveTab() {
   const themeOptions = useMemo(() => distinctThemes(indexRows), [indexRows]);
 
   const itemsById = useMemo(
-    () => new Map(boardItems.map((item) => [item.id, item] as const)),
-    [boardItems]
+    () => new Map(items.map((item) => [item.id, item] as const)),
+    [items]
   );
 
   const gridCells = useMemo((): GridCell[] => {
@@ -216,14 +236,7 @@ export default function ArchiveTab() {
       if (updateMemoryError) return fail("File uploaded but memory link failed.");
 
       const newId = `uploaded-${memoryRow.memory_id}`;
-      setUploadedItems((current) => [
-        ...current,
-        {
-          id: newId,
-          source: { uri: publicUrl ?? asset.uri },
-          height: imageHeights[(bundledItems.length + current.length) % imageHeights.length],
-        },
-      ]);
+      void loadItems();
 
       void (async () => {
         try {
@@ -331,7 +344,9 @@ export default function ArchiveTab() {
 
           {gridCells.length === 0 ? (
             <Text className="mt-6 text-center text-sm text-gray-500">
-              Nothing matches this search or cluster. Clear filters to see everything again.
+              {items.length === 0
+                ? "No uploads yet. Tap Upload to add your first image."
+                : "Nothing matches this search or cluster. Clear filters to see everything again."}
             </Text>
           ) : null}
 
