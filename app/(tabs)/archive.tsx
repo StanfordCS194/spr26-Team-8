@@ -15,6 +15,7 @@ import {
   placeholder_fetchRemoteArchiveMeta,
   placeholder_notifyArchiveIndexUpdated,
 } from "@/lib/teamIntegrationPlaceholders";
+import { supabase } from "@/lib/supabase";
 import * as FileSystem from "expo-file-system/legacy";
 import * as ImagePicker from "expo-image-picker";
 import { useEffect, useMemo, useState } from "react";
@@ -240,7 +241,15 @@ export default function ArchiveTab() {
     <View className="flex-1 bg-white">
       <SafeAreaView className="flex-1 bg-white">
         <ScrollView contentContainerClassName="px-5 pb-8" keyboardShouldPersistTaps="handled">
-          <Text className="pt-3 text-4xl font-black text-black">Archive</Text>
+          <View className="flex-row items-center justify-between pt-3">
+            <Text className="text-4xl font-black text-black">Archive</Text>
+            <Pressable
+              onPress={() => void supabase.auth.signOut()}
+              className="rounded-full border border-gray-200 px-3 py-2 active:opacity-70"
+            >
+              <Text className="text-xs font-black uppercase tracking-wide text-gray-700">Sign out</Text>
+            </Pressable>
+          </View>
           <Pressable
             className="mt-4 items-center rounded-2xl bg-blue-500 px-5 py-4"
             onPress={handleUpload}
