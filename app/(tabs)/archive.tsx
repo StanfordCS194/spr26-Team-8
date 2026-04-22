@@ -21,7 +21,20 @@ import * as FileSystem from "expo-file-system/legacy";
 import * as ImageManipulator from "expo-image-manipulator";
 import * as ImagePicker from "expo-image-picker";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Alert, Image, KeyboardAvoidingView, Modal, Platform, Pressable, RefreshControl, ScrollView, Text, TextInput, View } from "react-native";
+import {
+  Alert,
+  Image,
+  KeyboardAvoidingView,
+  Modal,
+  Platform,
+  Pressable,
+  RefreshControl,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+} from "react-native";
 import type { ImageSourcePropType } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
@@ -53,6 +66,21 @@ const isJpegAsset = (mimeType?: string | null, fileName?: string | null) => {
     name.endsWith(".jpg")
   );
 };
+
+const searchInputStyles = StyleSheet.create({
+  field: {
+    flex: 1,
+    minWidth: 0,
+    fontSize: 16,
+    lineHeight: 20,
+    color: "#0B0B0B",
+    paddingVertical: 12,
+    paddingHorizontal: 2,
+  },
+  android: {
+    textAlignVertical: "center",
+  },
+});
 
 export default function ArchiveTab() {
   const [items, setItems] = useState<BoardItem[]>([]);
@@ -365,154 +393,175 @@ export default function ArchiveTab() {
   }, [selectedItem]);
 
   return (
-    <View className="flex-1 bg-white">
-      <SafeAreaView className="flex-1 bg-white">
-        <ScrollView
-          contentContainerClassName="px-5 pb-8"
-          keyboardShouldPersistTaps="handled"
-          refreshControl={
-            <RefreshControl
-              refreshing={isRefreshing}
-              onRefresh={() => {
-                setIsRefreshing(true);
-                void loadItems().finally(() => setIsRefreshing(false));
-              }}
-            />
-          }
-        >
-          <View className="flex-row items-center justify-between pt-3">
-            <Text className="text-4xl font-black text-black">Archive</Text>
+    <View className="flex-1 bg-[#F4F0EA]">
+      <SafeAreaView className="flex-1 bg-[#F4F0EA]">
+        <View className="flex-1">
+          <View className="px-5">
+            <View className="flex-row items-start justify-between gap-2 pt-1.5">
+              <View className="min-w-0 flex-1 items-start gap-1">
+                <Text className="text-sm font-medium text-[#5F5F5F]">Your saves</Text>
+                <Text className="text-4xl font-bold tracking-[-0.5px] text-[#0B0B0B]">Library</Text>
+              </View>
+              <Pressable
+                onPress={() => void supabase.auth.signOut()}
+                className="shrink-0 rounded-full border border-[#E6E1DA] bg-white px-3 py-2 active:opacity-70"
+              >
+                <Text className="text-xs font-semibold uppercase tracking-wide text-[#5F5F5F]">Sign out</Text>
+              </Pressable>
+            </View>
             <Pressable
-              onPress={() => void supabase.auth.signOut()}
-              className="rounded-full border border-gray-200 px-3 py-2 active:opacity-70"
+              className="mt-3 items-center rounded-3xl bg-[#0B0B0B] px-5 py-3.5 active:opacity-90"
+              onPress={() => void handlePickImage()}
             >
-              <Text className="text-xs font-black uppercase tracking-wide text-gray-700">Sign out</Text>
+              <Text className="text-base font-semibold text-white">Add to library</Text>
             </Pressable>
+            <Text className="pt-3 text-sm leading-5 text-[#5F5F5F]">
+              Upload screenshots, files, notes, and more.
+            </Text>
+            <View className="mt-4 h-12 flex-row items-center rounded-3xl border border-[#E6E1DA] bg-white px-3 shadow-sm">
+              <TextInput
+                value={searchQuery}
+                onChangeText={setSearchQuery}
+                placeholder="Search titles, tags, categories…"
+                placeholderTextColor="rgba(95, 95, 95, 0.55)"
+                multiline={false}
+                autoCorrect={false}
+                autoCapitalize="none"
+                clearButtonMode="never"
+                underlineColorAndroid="transparent"
+                textContentType="none"
+                autoComplete="off"
+                style={[searchInputStyles.field, Platform.OS === "android" ? searchInputStyles.android : null]}
+              />
+            </View>
           </View>
-          <Pressable
-            className="mt-4 items-center rounded-2xl bg-blue-500 px-5 py-4"
-            onPress={() => void handlePickImage()}
-          >
-            <Text className="text-lg font-black text-white">Upload</Text>
-          </Pressable>
-          <Text className="pt-3 text-sm text-gray-500">
-            Upload screenshots, files, notes, and more.
-          </Text>
 
-          <View className="mt-4 rounded-2xl border border-gray-200 bg-gray-50 px-4 py-2">
-            <TextInput
-              value={searchQuery}
-              onChangeText={setSearchQuery}
-              placeholder="Search names, tags, themes…"
-              placeholderTextColor="#9CA3AF"
-              className="py-2 text-base text-black"
-              autoCapitalize="none"
-              autoCorrect={false}
-              clearButtonMode="while-editing"
-            />
-          </View>
           <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            className="mt-2"
-            contentContainerClassName="flex-row gap-2 pr-1"
+            className="flex-1"
+            contentContainerClassName="items-start px-5 pb-8"
+            keyboardShouldPersistTaps="handled"
+            keyboardDismissMode="on-drag"
+            refreshControl={
+              <RefreshControl
+                refreshing={isRefreshing}
+                onRefresh={() => {
+                  setIsRefreshing(true);
+                  void loadItems().finally(() => setIsRefreshing(false));
+                }}
+              />
+            }
           >
-            <Pressable
-              onPress={() => setThemeFilter("all")}
-              className={`rounded-full px-4 py-2 ${
-                themeFilter === "all" ? "bg-black" : "border border-gray-200 bg-white"
-              }`}
+            <Text className="mt-2 text-xs font-semibold uppercase tracking-[0.2em] text-[#6B6B6B]">Categories</Text>
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              className="mt-2"
+              contentContainerClassName="flex-row gap-2 pr-1"
             >
-              <Text
-                className={`text-sm font-black ${
-                  themeFilter === "all" ? "text-white" : "text-gray-800"
+              <Pressable
+                onPress={() => setThemeFilter("all")}
+                className={`rounded-full px-4 py-2 ${
+                  themeFilter === "all" ? "bg-[#0B0B0B]" : "border border-[#E6E1DA] bg-white"
                 }`}
               >
-                All
-              </Text>
-            </Pressable>
-            {themeOptions.map((theme) => {
-              const active = themeFilter === theme;
-              return (
-                <Pressable
-                  key={theme}
-                  onPress={() => setThemeFilter(active ? "all" : theme)}
-                  className={`rounded-full px-4 py-2 ${
-                    active ? "bg-blue-500" : "border border-gray-200 bg-white"
+                <Text
+                  className={`text-sm font-semibold ${
+                    themeFilter === "all" ? "text-white" : "text-[#0B0B0B]"
                   }`}
                 >
-                  <Text
-                    className={`text-sm font-black capitalize ${
-                      active ? "text-white" : "text-gray-800"
+                  All
+                </Text>
+              </Pressable>
+              {themeOptions.map((theme) => {
+                const active = themeFilter === theme;
+                return (
+                  <Pressable
+                    key={theme}
+                    onPress={() => setThemeFilter(active ? "all" : theme)}
+                    className={`rounded-full px-4 py-2 ${
+                      active ? "bg-[#0B0B0B]" : "border border-[#E6E1DA] bg-white"
                     }`}
                   >
-                    {theme}
-                  </Text>
-                </Pressable>
-              );
-            })}
+                    <Text
+                      className={`text-sm font-semibold capitalize ${
+                        active ? "text-white" : "text-[#0B0B0B]"
+                      }`}
+                    >
+                      {theme}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </ScrollView>
+
+            {gridCells.length === 0 ? (
+              <Text className="mt-6 text-center text-sm text-[#5F5F5F]">
+                {items.length === 0
+                  ? "No uploads yet. Tap Add to library to add your first image."
+                  : "Nothing matches this search or filter. Try clearing the search and choosing All."}
+              </Text>
+            ) : null}
+
+            <View className="mt-5 flex-row gap-3">
+              <View className="flex-1 gap-3">
+                {leftColumnCells.map(({ item, highlights }) => (
+                  <Pressable
+                    key={item.id}
+                    onPress={() => setSelectedItem(item)}
+                    className="overflow-hidden rounded-3xl border border-[#E6E1DA] bg-white shadow-sm"
+                  >
+                    <Image
+                      source={item.source}
+                      style={{ width: "100%", height: item.height }}
+                      resizeMode="cover"
+                    />
+                    {showMatchHints && highlights.length > 0 ? (
+                      <View className="border-t border-[#EFE8DF] bg-white px-2 py-1.5">
+                        {highlights.slice(0, 2).map((h, idx) => (
+                          <Text
+                            key={`${item.id}-${h.kind}-${h.value}-${idx}`}
+                            numberOfLines={1}
+                            className="text-[10px] font-semibold uppercase tracking-wide text-[#6B6B6B]"
+                          >
+                            {h.label}: {h.value}
+                          </Text>
+                        ))}
+                      </View>
+                    ) : null}
+                  </Pressable>
+                ))}
+              </View>
+              <View className="flex-1 gap-3">
+                {rightColumnCells.map(({ item, highlights }) => (
+                  <Pressable
+                    key={item.id}
+                    onPress={() => setSelectedItem(item)}
+                    className="overflow-hidden rounded-3xl border border-[#E6E1DA] bg-white shadow-sm"
+                  >
+                    <Image
+                      source={item.source}
+                      style={{ width: "100%", height: item.height }}
+                      resizeMode="cover"
+                    />
+                    {showMatchHints && highlights.length > 0 ? (
+                      <View className="border-t border-[#EFE8DF] bg-white px-2 py-1.5">
+                        {highlights.slice(0, 2).map((h, idx) => (
+                          <Text
+                            key={`${item.id}-${h.kind}-${h.value}-${idx}`}
+                            numberOfLines={1}
+                            className="text-[10px] font-semibold uppercase tracking-wide text-[#6B6B6B]"
+                          >
+                            {h.label}: {h.value}
+                          </Text>
+                        ))}
+                      </View>
+                    ) : null}
+                  </Pressable>
+                ))}
+              </View>
+            </View>
           </ScrollView>
-
-          {gridCells.length === 0 ? (
-            <Text className="mt-6 text-center text-sm text-gray-500">
-              {items.length === 0
-                ? "No uploads yet. Tap Upload to add your first image."
-                : "Nothing matches this search or cluster. Clear filters to see everything again."}
-            </Text>
-          ) : null}
-
-          <View className="mt-5 flex-row gap-3">
-            <View className="flex-1 gap-3">
-              {leftColumnCells.map(({ item, highlights }) => (
-                <Pressable key={item.id} onPress={() => setSelectedItem(item)} className="overflow-hidden rounded-2xl bg-gray-100">
-                  <Image
-                    source={item.source}
-                    style={{ width: "100%", height: item.height }}
-                    resizeMode="cover"
-                  />
-                  {showMatchHints && highlights.length > 0 ? (
-                    <View className="border-t border-gray-200 bg-white px-2 py-1.5">
-                      {highlights.slice(0, 2).map((h, idx) => (
-                        <Text
-                          key={`${item.id}-${h.kind}-${h.value}-${idx}`}
-                          numberOfLines={1}
-                          className="text-[10px] font-semibold uppercase tracking-wide text-gray-500"
-                        >
-                          {h.label}: {h.value}
-                        </Text>
-                      ))}
-                    </View>
-                  ) : null}
-                </Pressable>
-              ))}
-            </View>
-
-            <View className="flex-1 gap-3">
-              {rightColumnCells.map(({ item, highlights }) => (
-                <Pressable key={item.id} onPress={() => setSelectedItem(item)} className="overflow-hidden rounded-2xl bg-gray-100">
-                  <Image
-                    source={item.source}
-                    style={{ width: "100%", height: item.height }}
-                    resizeMode="cover"
-                  />
-                  {showMatchHints && highlights.length > 0 ? (
-                    <View className="border-t border-gray-200 bg-white px-2 py-1.5">
-                      {highlights.slice(0, 2).map((h, idx) => (
-                        <Text
-                          key={`${item.id}-${h.kind}-${h.value}-${idx}`}
-                          numberOfLines={1}
-                          className="text-[10px] font-semibold uppercase tracking-wide text-gray-500"
-                        >
-                          {h.label}: {h.value}
-                        </Text>
-                      ))}
-                    </View>
-                  ) : null}
-                </Pressable>
-              ))}
-            </View>
-          </View>
-        </ScrollView>
+        </View>
 
         <Modal visible={!!selectedItem} transparent animationType="fade" onRequestClose={() => setSelectedItem(null)}>
           <Pressable className="flex-1 items-center justify-center bg-black/60" onPress={() => setSelectedItem(null)}>
