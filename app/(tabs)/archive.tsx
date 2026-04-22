@@ -300,18 +300,6 @@ export default function ArchiveTab() {
     const memoryId = selectedItem.id.replace(/^uploaded-/, "");
     setIsDeleting(true);
     try {
-      const { data: { user } } = await supabase.auth.getUser();
-
-      if (user) {
-        const folderPath = `${user.id}/${memoryId}`;
-        const { data: storageFiles } = await supabase.storage.from("memories").list(folderPath);
-        if (storageFiles && storageFiles.length > 0) {
-          await supabase.storage.from("memories").remove(
-            storageFiles.map((f) => `${folderPath}/${f.name}`)
-          );
-        }
-      }
-
       const { data: memory } = await supabase
         .from("memories")
         .select("file_id")
@@ -319,6 +307,21 @@ export default function ArchiveTab() {
         .single();
 
       if (memory?.file_id) {
+        const { data: fileRecord, error: fileError } = await supabase
+          .from("files")
+          .select("storage_path")
+          .eq("file_id", memory.file_id)
+          .single();
+
+        if (fileRecord?.storage_path) {
+          const { error: storageError } = await supabase.storage
+            .from("memories")
+            .remove([fileRecord.storage_path]);
+          if (storageError) console.error("[delete] storage remove failed:", storageError);
+        } else {
+          console.error("[delete] could not get storage_path:", fileError);
+        }
+
         await supabase.from("files").delete().eq("file_id", memory.file_id);
       }
       await supabase.from("memories").delete().eq("memory_id", memoryId);
