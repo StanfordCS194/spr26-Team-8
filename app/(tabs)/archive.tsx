@@ -15,24 +15,16 @@ import {
   placeholder_fetchRemoteArchiveMeta,
   placeholder_notifyArchiveIndexUpdated,
 } from "@/lib/teamIntegrationPlaceholders";
+import { supabase } from "@/lib/supabase";
+import { decode } from "base64-arraybuffer";
 import * as FileSystem from "expo-file-system/legacy";
 import * as ImagePicker from "expo-image-picker";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Alert, Image, Modal, Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import type { ImageSourcePropType } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
-type ContextModule = {
-  keys: () => string[];
-  (id: string): number;
-};
-
-type RequireWithContext = NodeRequire & {
-  context: (path: string, recursive?: boolean, filter?: RegExp) => ContextModule;
-};
-
 const imageHeights = [220, 280, 200, 260];
-const uploadsDir = `${FileSystem.documentDirectory ?? ""}files`;
 
 type BoardItem = {
   id: string;
@@ -45,23 +37,13 @@ type GridCell = {
   highlights: ArchiveSearchMatchHighlight[];
 };
 
-const imagesContext = (require as RequireWithContext).context(
-  "../../assets/files",
-  false,
-  /\.(png|jpe?g|webp|gif)$/i
-);
-
-const bundledItems: BoardItem[] = imagesContext
-  .keys()
-  .sort((a, b) => a.localeCompare(b))
-  .map((key, index) => ({
-    id: key,
-    source: imagesContext(key),
-    height: imageHeights[index % imageHeights.length],
-  }));
+type MemoryFileRow = {
+  memory_id: string;
+  files: { storage_path: string } | { storage_path: string }[] | null;
+};
 
 export default function ArchiveTab() {
-  const [uploadedItems, setUploadedItems] = useState<BoardItem[]>([]);
+  const [items, setItems] = useState<BoardItem[]>([]);
   const [meta, setMeta] = useState<Record<string, ArchiveItemMeta>>({});
   const [themeOverrides, setThemeOverrides] = useState<Record<string, string>>({});
   const [searchQuery, setSearchQuery] = useState("");
@@ -73,45 +55,52 @@ export default function ArchiveTab() {
     void loadSupplementalSearchText().then(setSupplementalSearchById);
   }, []);
 
-  useEffect(() => {
-    const loadUploadedFiles = async () => {
-      try {
-        if (!FileSystem.documentDirectory) return;
+  const loadItems = useCallback(async () => {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return setItems([]);
 
-        const dirInfo = await FileSystem.getInfoAsync(uploadsDir);
-        if (!dirInfo.exists) {
-          await FileSystem.makeDirectoryAsync(uploadsDir, { intermediates: true });
-          setUploadedItems([]);
-          return;
-        }
+    const { data } = await supabase
+      .from("memories")
+      .select("memory_id, files(storage_path)")
+      .eq("user_id", user.id)
+      .not("file_id", "is", null)
+      .order("memory_id", { ascending: true });
 
-        const fileNames = await FileSystem.readDirectoryAsync(uploadsDir);
-        const imageNames = fileNames
-          .filter((name) => /\.(png|jpe?g|webp|gif)$/i.test(name))
-          .sort((a, b) => a.localeCompare(b));
+    const entries = ((data as MemoryFileRow[] | null) ?? []).flatMap((m) => {
+      const file = Array.isArray(m.files) ? m.files[0] : m.files;
+      return file ? [{ memory_id: m.memory_id, storage_path: file.storage_path }] : [];
+    });
+    if (entries.length === 0) return setItems([]);
 
-        const nextUploadedItems: BoardItem[] = imageNames.map((name, index) => ({
-          id: `uploaded-${name}`,
-          source: { uri: `${uploadsDir}/${name}` },
-          height: imageHeights[(bundledItems.length + index) % imageHeights.length],
-        }));
+    const { data: signed } = await supabase.storage
+      .from("memories")
+      .createSignedUrls(entries.map((e) => e.storage_path), 60 * 60);
 
-        setUploadedItems(nextUploadedItems);
-      } catch {
-        Alert.alert("Upload", "Could not load uploaded files.");
-      }
-    };
-
-    void loadUploadedFiles();
+    setItems(
+      (signed ?? []).flatMap((s, i) =>
+        s.signedUrl
+          ? [{
+              id: `uploaded-${entries[i].memory_id}`,
+              source: { uri: s.signedUrl },
+              height: imageHeights[i % imageHeights.length],
+            }]
+          : []
+      )
+    );
   }, []);
 
-  const boardItems = useMemo(
-    () => [...bundledItems, ...uploadedItems],
-    [uploadedItems]
-  );
+  useEffect(() => {
+    void loadItems();
+    const { data } = supabase.auth.onAuthStateChange((event) => {
+      if (event === "SIGNED_IN" || event === "SIGNED_OUT" || event === "USER_UPDATED") {
+        void loadItems();
+      }
+    });
+    return () => data.subscription.unsubscribe();
+  }, [loadItems]);
 
   useEffect(() => {
-    const ids = boardItems.map((item) => ({
+    const ids = items.map((item) => ({
       id: item.id,
       fileName: fileNameFromArchiveId(item.id),
     }));
@@ -130,15 +119,15 @@ export default function ArchiveTab() {
     return () => {
       cancelled = true;
     };
-  }, [boardItems]);
+  }, [items]);
 
   const indexRows = useMemo(
     () =>
-      enrichArchiveRows(boardItems.map((b) => b.id), meta, {
+      enrichArchiveRows(items.map((b) => b.id), meta, {
         themeOverrides,
         searchableTextById: supplementalSearchById,
       }),
-    [boardItems, meta, themeOverrides, supplementalSearchById]
+    [items, meta, themeOverrides, supplementalSearchById]
   );
 
   const indexPayload = useMemo(() => archiveIndexForBackend(indexRows), [indexRows]);
@@ -155,8 +144,8 @@ export default function ArchiveTab() {
   const themeOptions = useMemo(() => distinctThemes(indexRows), [indexRows]);
 
   const itemsById = useMemo(
-    () => new Map(boardItems.map((item) => [item.id, item] as const)),
-    [boardItems]
+    () => new Map(items.map((item) => [item.id, item] as const)),
+    [items]
   );
 
   const gridCells = useMemo((): GridCell[] => {
@@ -175,64 +164,94 @@ export default function ArchiveTab() {
   const showMatchHints = searchQuery.trim().length > 0;
 
   const handleUpload = async () => {
+    const fail = (msg: string) => Alert.alert("Upload", msg);
     try {
-      if (!FileSystem.documentDirectory) {
-        Alert.alert("Upload", "File storage is unavailable on this device.");
-        return;
-      }
-
       const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
-      if (!permission.granted) {
-        Alert.alert("Upload", "Please allow photo library access to upload images.");
-        return;
-      }
+      if (!permission.granted) return fail("Please allow photo library access to upload images.");
 
       const picked = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: ["images"],
         allowsEditing: false,
         quality: 1,
       });
-
-      if (picked.canceled || !picked.assets.length) {
-        return;
-      }
+      if (picked.canceled || !picked.assets.length) return;
 
       const asset = picked.assets[0];
-      const fallbackName = asset.uri.split("/").pop() || `upload-${Date.now()}.jpg`;
-      const rawName = asset.fileName || fallbackName;
-      const sanitizedName = rawName.replace(/[^\w.\-]/g, "_");
-      const fileName = `${Date.now()}-${sanitizedName}`;
-      const destinationUri = `${uploadsDir}/${fileName}`;
+      const rawName = asset.fileName || asset.uri.split("/").pop() || `upload-${Date.now()}.jpg`;
+      const fileName = `${Date.now()}-${rawName.replace(/[^\w.\-]/g, "_")}`;
+      const contentType = asset.mimeType ?? "image/jpeg";
 
-      await FileSystem.makeDirectoryAsync(uploadsDir, { intermediates: true });
-      await FileSystem.copyAsync({ from: asset.uri, to: destinationUri });
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return fail("Could not identify the current user.");
 
-      const newId = `uploaded-${fileName}`;
+      const { data: memoryRow } = await supabase
+        .from("memories")
+        .insert({ user_id: user.id, source: "camera_roll" })
+        .select("memory_id")
+        .single();
+      if (!memoryRow) return fail("Could not create memory record.");
 
-      setUploadedItems((current) => [
-        ...current,
-        {
-          id: newId,
-          source: { uri: destinationUri },
-          height: imageHeights[(bundledItems.length + current.length) % imageHeights.length],
-        },
-      ]);
+      const storagePath = `${user.id}/${memoryRow.memory_id}/${fileName}`;
+      const cleanupMemory = () =>
+        supabase.from("memories").delete().eq("memory_id", memoryRow.memory_id);
+
+      const base64 = await FileSystem.readAsStringAsync(asset.uri, {
+        encoding: FileSystem.EncodingType.Base64,
+      });
+      const arrayBuffer = decode(base64);
+
+      const { error: uploadError } = await supabase.storage
+        .from("memories")
+        .upload(storagePath, arrayBuffer, { contentType, upsert: false });
+      if (uploadError) {
+        await cleanupMemory();
+        return fail(`Storage upload failed: ${uploadError.message}`);
+      }
+
+      const publicUrl =
+        supabase.storage.from("memories").getPublicUrl(storagePath).data.publicUrl || null;
+
+      const { data: fileRow } = await supabase
+        .from("files")
+        .insert({
+          user_id: user.id,
+          file_name: fileName,
+          storage_path: storagePath,
+          public_url: publicUrl,
+          original_format: "image",
+          mime_type: contentType,
+          byte_size: arrayBuffer.byteLength,
+        })
+        .select("file_id")
+        .single();
+      if (!fileRow) {
+        await cleanupMemory();
+        return fail("Could not create file record.");
+      }
+
+      const { error: updateMemoryError } = await supabase
+        .from("memories")
+        .update({ file_id: fileRow.file_id })
+        .eq("memory_id", memoryRow.memory_id);
+      if (updateMemoryError) return fail("File uploaded but memory link failed.");
+
+      const newId = `uploaded-${memoryRow.memory_id}`;
+      void loadItems();
 
       void (async () => {
         try {
-          const visionText = await placeholder_extractSearchableTextFromImage(destinationUri, {
+          const visionText = await placeholder_extractSearchableTextFromImage(asset.uri, {
             id: newId,
             fileName,
           });
           if (!visionText.trim()) return;
-          const next = await upsertSupplementalSearchText(newId, visionText);
-          setSupplementalSearchById(next);
+          setSupplementalSearchById(await upsertSupplementalSearchText(newId, visionText));
         } catch {
           /* vision pipeline optional */
         }
       })();
     } catch {
-      Alert.alert("Upload", "Could not upload this file.");
+      fail("Could not upload this file.");
     }
   };
 
@@ -240,7 +259,15 @@ export default function ArchiveTab() {
     <View className="flex-1 bg-white">
       <SafeAreaView className="flex-1 bg-white">
         <ScrollView contentContainerClassName="px-5 pb-8" keyboardShouldPersistTaps="handled">
-          <Text className="pt-3 text-4xl font-black text-black">Archive</Text>
+          <View className="flex-row items-center justify-between pt-3">
+            <Text className="text-4xl font-black text-black">Archive</Text>
+            <Pressable
+              onPress={() => void supabase.auth.signOut()}
+              className="rounded-full border border-gray-200 px-3 py-2 active:opacity-70"
+            >
+              <Text className="text-xs font-black uppercase tracking-wide text-gray-700">Sign out</Text>
+            </Pressable>
+          </View>
           <Pressable
             className="mt-4 items-center rounded-2xl bg-blue-500 px-5 py-4"
             onPress={handleUpload}
@@ -317,7 +344,9 @@ export default function ArchiveTab() {
 
           {gridCells.length === 0 ? (
             <Text className="mt-6 text-center text-sm text-gray-500">
-              Nothing matches this search or cluster. Clear filters to see everything again.
+              {items.length === 0
+                ? "No uploads yet. Tap Upload to add your first image."
+                : "Nothing matches this search or cluster. Clear filters to see everything again."}
             </Text>
           ) : null}
 
