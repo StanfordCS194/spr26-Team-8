@@ -8,7 +8,7 @@ import {
   mergeArchiveMeta,
   searchAndRankArchiveRows,
 } from "@/lib/archiveSearchAndCluster";
-import { loadSupplementalSearchText, upsertSupplementalSearchText } from "@/lib/archiveSupplementalSearchText";
+import { loadSupplementalSearchText, removeSupplementalSearchText, upsertSupplementalSearchText } from "@/lib/archiveSupplementalSearchText";
 import {
   placeholder_extractSearchableTextFromImage,
   placeholder_fetchEmbeddingThemeOverrides,
@@ -20,7 +20,7 @@ import { decode } from "base64-arraybuffer";
 import * as FileSystem from "expo-file-system/legacy";
 import * as ImagePicker from "expo-image-picker";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Alert, Image, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, Text, TextInput, View } from "react-native";
+import { Alert, Image, KeyboardAvoidingView, Modal, Platform, Pressable, RefreshControl, ScrollView, Text, TextInput, View } from "react-native";
 import type { ImageSourcePropType } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
@@ -53,6 +53,8 @@ export default function ArchiveTab() {
   const [pendingAsset, setPendingAsset] = useState<ImagePicker.ImagePickerAsset | null>(null);
   const [captionDraft, setCaptionDraft] = useState("");
   const [isUploading, setIsUploading] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [isRefreshing, setIsRefreshing] = useState(false);
 
   useEffect(() => {
     void loadSupplementalSearchText().then(setSupplementalSearchById);
@@ -199,6 +201,22 @@ export default function ArchiveTab() {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return fail("Could not identify the current user.");
 
+      if (asset.fileName) {
+        const sanitizedName = asset.fileName.replace(/[^\w.\-]/g, "_");
+        const { data: existing } = await supabase
+          .from("files")
+          .select("file_id")
+          .eq("user_id", user.id)
+          .ilike("file_name", `%-${sanitizedName}`)
+          .limit(1);
+        if (existing && existing.length > 0) return fail("This photo has already been uploaded.");
+      }
+
+      const base64 = await FileSystem.readAsStringAsync(asset.uri, {
+        encoding: FileSystem.EncodingType.Base64,
+      });
+      const arrayBuffer = decode(base64);
+
       const { data: memoryRow } = await supabase
         .from("memories")
         .insert({ user_id: user.id, source: "camera_roll", user_caption: caption.trim() || null })
@@ -209,11 +227,6 @@ export default function ArchiveTab() {
       const storagePath = `${user.id}/${memoryRow.memory_id}/${fileName}`;
       const cleanupMemory = () =>
         supabase.from("memories").delete().eq("memory_id", memoryRow.memory_id);
-
-      const base64 = await FileSystem.readAsStringAsync(asset.uri, {
-        encoding: FileSystem.EncodingType.Base64,
-      });
-      const arrayBuffer = decode(base64);
 
       const { error: uploadError } = await supabase.storage
         .from("memories")
@@ -251,24 +264,30 @@ export default function ArchiveTab() {
       if (updateMemoryError) return fail("File uploaded but memory link failed.");
 
       const newId = `uploaded-${memoryRow.memory_id}`;
-      void loadItems();
 
-      void (async () => {
-        try {
-          const visionText = await placeholder_extractSearchableTextFromImage(asset.uri, {
-            id: newId,
-            fileName,
-            mimeType: contentType,
-          });
-          if (!visionText.trim()) return;
-          await supabase.from("memories")
-            .update({ ocr_description: visionText })
-            .eq("memory_id", memoryRow.memory_id);
-          setSupplementalSearchById(await upsertSupplementalSearchText(newId, visionText));
-        } catch {
-          /* vision pipeline optional */
-        }
-      })();
+      const cleanupAll = async () => {
+        await supabase.storage.from("memories").remove([storagePath]);
+        await supabase.from("files").delete().eq("file_id", fileRow.file_id);
+        await cleanupMemory();
+      };
+
+      let visionText: string;
+      try {
+        visionText = await placeholder_extractSearchableTextFromImage(asset.uri, {
+          id: newId,
+          fileName,
+          mimeType: contentType,
+        });
+      } catch (err) {
+        await cleanupAll();
+        return fail(`Could not generate a description for this photo: ${err instanceof Error ? err.message : "unknown error"}`);
+      }
+
+      await supabase.from("memories")
+        .update({ ocr_description: visionText })
+        .eq("memory_id", memoryRow.memory_id);
+      setSupplementalSearchById(await upsertSupplementalSearchText(newId, visionText));
+      void loadItems();
     } catch {
       fail("Could not upload this file.");
     } finally {
@@ -276,10 +295,59 @@ export default function ArchiveTab() {
     }
   };
 
+  const handleDeletePhoto = useCallback(async () => {
+    if (!selectedItem) return;
+    const memoryId = selectedItem.id.replace(/^uploaded-/, "");
+    setIsDeleting(true);
+    try {
+      const { data: memory } = await supabase
+        .from("memories")
+        .select("file_id")
+        .eq("memory_id", memoryId)
+        .single();
+
+      if (memory?.file_id) {
+        const { data: fileRecord, error: fileError } = await supabase
+          .from("files")
+          .select("storage_path")
+          .eq("file_id", memory.file_id)
+          .single();
+
+        if (fileRecord?.storage_path) {
+          await supabase.storage.from("memories").remove([fileRecord.storage_path]);
+        }
+
+        await supabase.from("files").delete().eq("file_id", memory.file_id);
+      }
+      await supabase.from("memories").delete().eq("memory_id", memoryId);
+
+      const updated = await removeSupplementalSearchText(selectedItem.id);
+      setSupplementalSearchById(updated);
+      setItems((prev) => prev.filter((i) => i.id !== selectedItem.id));
+      setSelectedItem(null);
+    } catch {
+      Alert.alert("Error", "Could not delete this photo.");
+    } finally {
+      setIsDeleting(false);
+    }
+  }, [selectedItem]);
+
   return (
     <View className="flex-1 bg-white">
       <SafeAreaView className="flex-1 bg-white">
-        <ScrollView contentContainerClassName="px-5 pb-8" keyboardShouldPersistTaps="handled">
+        <ScrollView
+          contentContainerClassName="px-5 pb-8"
+          keyboardShouldPersistTaps="handled"
+          refreshControl={
+            <RefreshControl
+              refreshing={isRefreshing}
+              onRefresh={() => {
+                setIsRefreshing(true);
+                void loadItems().finally(() => setIsRefreshing(false));
+              }}
+            />
+          }
+        >
           <View className="flex-row items-center justify-between pt-3">
             <Text className="text-4xl font-black text-black">Archive</Text>
             <Pressable
@@ -417,11 +485,35 @@ export default function ArchiveTab() {
         <Modal visible={!!selectedItem} transparent animationType="fade" onRequestClose={() => setSelectedItem(null)}>
           <Pressable className="flex-1 items-center justify-center bg-black/60" onPress={() => setSelectedItem(null)}>
             {selectedItem ? (
-              <Image
-                source={selectedItem.source}
-                style={{ width: "85%", height: "70%", borderRadius: 16 }}
-                resizeMode="contain"
-              />
+              <View style={{ width: "85%", height: "70%" }}>
+                <Image
+                  source={selectedItem.source}
+                  style={{ width: "100%", height: "100%", borderRadius: 16 }}
+                  resizeMode="contain"
+                />
+                <Pressable
+                  onPress={() =>
+                    Alert.alert("Delete photo", "This will permanently delete this photo.", [
+                      { text: "Cancel", style: "cancel" },
+                      { text: "Delete", style: "destructive", onPress: () => void handleDeletePhoto() },
+                    ])
+                  }
+                  disabled={isDeleting}
+                  style={{
+                    position: "absolute",
+                    top: -14,
+                    right: -14,
+                    width: 30,
+                    height: 30,
+                    borderRadius: 15,
+                    backgroundColor: "rgba(0,0,0,0.75)",
+                    alignItems: "center",
+                    justifyContent: "center",
+                  }}
+                >
+                  <Text style={{ color: "white", fontSize: 14, fontWeight: "bold", lineHeight: 18 }}>✕</Text>
+                </Pressable>
+              </View>
             ) : null}
           </Pressable>
         </Modal>

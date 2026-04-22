@@ -44,6 +44,15 @@ function mergeChunk(prev: string | undefined, add: string): string {
   return `${a} ${b}`;
 }
 
+export async function removeSupplementalSearchText(id: string): Promise<Record<string, string>> {
+  const current = await loadSupplementalSearchText();
+  if (!(id in current)) return current;
+  const next = { ...current };
+  delete next[id];
+  await writeAll(next);
+  return next;
+}
+
 /**
  * Merge new OCR/caption text for an archive id and persist.
  * Reloads from disk first so concurrent uploads do not clobber each other.
