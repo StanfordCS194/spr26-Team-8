@@ -20,7 +20,7 @@ import { decode } from "base64-arraybuffer";
 import * as FileSystem from "expo-file-system/legacy";
 import * as ImagePicker from "expo-image-picker";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Alert, Image, Modal, Pressable, ScrollView, Text, TextInput, View } from "react-native";
+import { Alert, Image, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import type { ImageSourcePropType } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
@@ -50,6 +50,9 @@ export default function ArchiveTab() {
   const [themeFilter, setThemeFilter] = useState<"all" | string>("all");
   const [supplementalSearchById, setSupplementalSearchById] = useState<Record<string, string>>({});
   const [selectedItem, setSelectedItem] = useState<BoardItem | null>(null);
+  const [pendingAsset, setPendingAsset] = useState<ImagePicker.ImagePickerAsset | null>(null);
+  const [captionDraft, setCaptionDraft] = useState("");
+  const [isUploading, setIsUploading] = useState(false);
 
   useEffect(() => {
     void loadSupplementalSearchText().then(setSupplementalSearchById);
@@ -163,20 +166,32 @@ export default function ArchiveTab() {
 
   const showMatchHints = searchQuery.trim().length > 0;
 
-  const handleUpload = async () => {
+  const handlePickImage = async () => {
     const fail = (msg: string) => Alert.alert("Upload", msg);
     try {
       const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
       if (!permission.granted) return fail("Please allow photo library access to upload images.");
-
       const picked = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: ["images"],
         allowsEditing: false,
         quality: 1,
       });
       if (picked.canceled || !picked.assets.length) return;
+      setPendingAsset(picked.assets[0]);
+    } catch {
+      fail("Could not open photo library.");
+    }
+  };
 
-      const asset = picked.assets[0];
+  const handleConfirmUpload = async (caption: string) => {
+    if (!pendingAsset) return;
+    const asset = pendingAsset;
+    setPendingAsset(null);
+    setCaptionDraft("");
+    setIsUploading(true);
+
+    const fail = (msg: string) => Alert.alert("Upload", msg);
+    try {
       const rawName = asset.fileName || asset.uri.split("/").pop() || `upload-${Date.now()}.jpg`;
       const fileName = `${Date.now()}-${rawName.replace(/[^\w.\-]/g, "_")}`;
       const contentType = asset.mimeType ?? "image/jpeg";
@@ -186,7 +201,7 @@ export default function ArchiveTab() {
 
       const { data: memoryRow } = await supabase
         .from("memories")
-        .insert({ user_id: user.id, source: "camera_roll" })
+        .insert({ user_id: user.id, source: "camera_roll", user_caption: caption.trim() || null })
         .select("memory_id")
         .single();
       if (!memoryRow) return fail("Could not create memory record.");
@@ -243,8 +258,12 @@ export default function ArchiveTab() {
           const visionText = await placeholder_extractSearchableTextFromImage(asset.uri, {
             id: newId,
             fileName,
+            mimeType: contentType,
           });
           if (!visionText.trim()) return;
+          await supabase.from("memories")
+            .update({ ocr_description: visionText })
+            .eq("memory_id", memoryRow.memory_id);
           setSupplementalSearchById(await upsertSupplementalSearchText(newId, visionText));
         } catch {
           /* vision pipeline optional */
@@ -252,6 +271,8 @@ export default function ArchiveTab() {
       })();
     } catch {
       fail("Could not upload this file.");
+    } finally {
+      setIsUploading(false);
     }
   };
 
@@ -270,7 +291,7 @@ export default function ArchiveTab() {
           </View>
           <Pressable
             className="mt-4 items-center rounded-2xl bg-blue-500 px-5 py-4"
-            onPress={handleUpload}
+            onPress={() => void handlePickImage()}
           >
             <Text className="text-lg font-black text-white">Upload</Text>
           </Pressable>
@@ -290,16 +311,6 @@ export default function ArchiveTab() {
               clearButtonMode="while-editing"
             />
           </View>
-          <Text className="mt-1 text-xs text-gray-400">
-            All words must match. Stronger matches (file name, exact tags) sort first. OCR / in-image text can
-            merge into the same index — enable{" "}
-            <Text className="font-mono text-gray-500">useVisionTextExtraction</Text> in
-            teamIntegrationPlaceholders when your vision backend or native module is ready.
-          </Text>
-
-          <Text className="mt-2 text-xs font-semibold uppercase tracking-wide text-gray-400">
-            Clusters (auto from filenames)
-          </Text>
           <ScrollView
             horizontal
             showsHorizontalScrollIndicator={false}
@@ -413,6 +424,56 @@ export default function ArchiveTab() {
               />
             ) : null}
           </Pressable>
+        </Modal>
+
+        <Modal
+          visible={!!pendingAsset}
+          transparent
+          animationType="slide"
+          onRequestClose={() => { setPendingAsset(null); setCaptionDraft(""); }}
+        >
+          <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} className="flex-1">
+            <Pressable className="flex-1" onPress={() => { setPendingAsset(null); setCaptionDraft(""); }} />
+            <View className="rounded-t-3xl border-t border-gray-200 bg-white px-5 pb-10 pt-5">
+              {pendingAsset ? (
+                <Image
+                  source={{ uri: pendingAsset.uri }}
+                  style={{ width: "100%", height: 120, borderRadius: 12, marginBottom: 16 }}
+                  resizeMode="cover"
+                />
+              ) : null}
+              <Text className="mb-2 text-base font-black text-black">Add a caption</Text>
+              <View className="mb-4 rounded-2xl border border-gray-200 px-4 py-3">
+                <TextInput
+                  value={captionDraft}
+                  onChangeText={setCaptionDraft}
+                  placeholder="Optional — describe what this is…"
+                  placeholderTextColor="#9CA3AF"
+                  className="text-base text-black"
+                  multiline
+                  numberOfLines={3}
+                  autoFocus
+                />
+              </View>
+              <View className="flex-row gap-3">
+                <Pressable
+                  onPress={() => { setPendingAsset(null); setCaptionDraft(""); }}
+                  className="flex-1 items-center rounded-2xl border border-gray-200 py-4 active:opacity-70"
+                >
+                  <Text className="text-base font-black text-gray-700">Cancel</Text>
+                </Pressable>
+                <Pressable
+                  onPress={() => void handleConfirmUpload(captionDraft)}
+                  disabled={isUploading}
+                  className="flex-1 items-center rounded-2xl bg-blue-500 py-4 active:opacity-70"
+                >
+                  <Text className="text-base font-black text-white">
+                    {isUploading ? "Uploading…" : "Upload"}
+                  </Text>
+                </Pressable>
+              </View>
+            </View>
+          </KeyboardAvoidingView>
         </Modal>
       </SafeAreaView>
     </View>
