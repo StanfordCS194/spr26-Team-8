@@ -201,12 +201,13 @@ export default function ArchiveTab() {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return fail("Could not identify the current user.");
 
-      if (asset.assetId) {
+      if (asset.fileName) {
+        const sanitizedName = asset.fileName.replace(/[^\w.\-]/g, "_");
         const { data: existing } = await supabase
-          .from("memories")
-          .select("memory_id")
+          .from("files")
+          .select("file_id")
           .eq("user_id", user.id)
-          .eq("source", `camera_roll:${asset.assetId}`)
+          .like("file_name", `%-${sanitizedName}`)
           .limit(1);
         if (existing && existing.length > 0) return fail("This photo has already been uploaded.");
       }
@@ -218,7 +219,7 @@ export default function ArchiveTab() {
 
       const { data: memoryRow } = await supabase
         .from("memories")
-        .insert({ user_id: user.id, source: asset.assetId ? `camera_roll:${asset.assetId}` : "camera_roll", user_caption: caption.trim() || null })
+        .insert({ user_id: user.id, source: "camera_roll", user_caption: caption.trim() || null })
         .select("memory_id")
         .single();
       if (!memoryRow) return fail("Could not create memory record.");
