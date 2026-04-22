@@ -300,22 +300,28 @@ export default function ArchiveTab() {
     const memoryId = selectedItem.id.replace(/^uploaded-/, "");
     setIsDeleting(true);
     try {
+      const { data: { user } } = await supabase.auth.getUser();
+
+      if (user) {
+        const folderPath = `${user.id}/${memoryId}`;
+        const { data: storageFiles } = await supabase.storage.from("memories").list(folderPath);
+        if (storageFiles && storageFiles.length > 0) {
+          await supabase.storage.from("memories").remove(
+            storageFiles.map((f) => `${folderPath}/${f.name}`)
+          );
+        }
+      }
+
       const { data: memory } = await supabase
         .from("memories")
-        .select("file_id, files(storage_path)")
+        .select("file_id")
         .eq("memory_id", memoryId)
         .single();
 
-      if (memory) {
-        const file = Array.isArray(memory.files) ? memory.files[0] : memory.files;
-        if (file?.storage_path) {
-          await supabase.storage.from("memories").remove([file.storage_path]);
-        }
-        if (memory.file_id) {
-          await supabase.from("files").delete().eq("file_id", memory.file_id);
-        }
-        await supabase.from("memories").delete().eq("memory_id", memoryId);
+      if (memory?.file_id) {
+        await supabase.from("files").delete().eq("file_id", memory.file_id);
       }
+      await supabase.from("memories").delete().eq("memory_id", memoryId);
 
       const updated = await removeSupplementalSearchText(selectedItem.id);
       setSupplementalSearchById(updated);
