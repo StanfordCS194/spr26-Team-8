@@ -207,7 +207,7 @@ export default function ArchiveTab() {
           .from("files")
           .select("file_id")
           .eq("user_id", user.id)
-          .like("file_name", `%-${sanitizedName}`)
+          .ilike("file_name", `%-${sanitizedName}`)
           .limit(1);
         if (existing && existing.length > 0) return fail("This photo has already been uploaded.");
       }
