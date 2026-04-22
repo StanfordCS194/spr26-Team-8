@@ -252,24 +252,30 @@ export default function ArchiveTab() {
       if (updateMemoryError) return fail("File uploaded but memory link failed.");
 
       const newId = `uploaded-${memoryRow.memory_id}`;
-      void loadItems();
 
-      void (async () => {
-        try {
-          const visionText = await placeholder_extractSearchableTextFromImage(asset.uri, {
-            id: newId,
-            fileName,
-            mimeType: contentType,
-          });
-          if (!visionText.trim()) return;
-          await supabase.from("memories")
-            .update({ ocr_description: visionText })
-            .eq("memory_id", memoryRow.memory_id);
-          setSupplementalSearchById(await upsertSupplementalSearchText(newId, visionText));
-        } catch (err) {
-          console.warn("[vision] description extraction failed:", err);
-        }
-      })();
+      const cleanupAll = async () => {
+        await supabase.storage.from("memories").remove([storagePath]);
+        await supabase.from("files").delete().eq("file_id", fileRow.file_id);
+        await cleanupMemory();
+      };
+
+      let visionText: string;
+      try {
+        visionText = await placeholder_extractSearchableTextFromImage(asset.uri, {
+          id: newId,
+          fileName,
+          mimeType: contentType,
+        });
+      } catch (err) {
+        await cleanupAll();
+        return fail(`Could not generate a description for this photo: ${err instanceof Error ? err.message : "unknown error"}`);
+      }
+
+      await supabase.from("memories")
+        .update({ ocr_description: visionText })
+        .eq("memory_id", memoryRow.memory_id);
+      setSupplementalSearchById(await upsertSupplementalSearchText(newId, visionText));
+      void loadItems();
     } catch {
       fail("Could not upload this file.");
     } finally {

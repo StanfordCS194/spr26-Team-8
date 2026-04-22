@@ -4,6 +4,7 @@
  */
 
 import * as FileSystem from "expo-file-system/legacy";
+import * as ImageManipulator from "expo-image-manipulator";
 import type { ArchiveItemMeta } from "@/lib/archiveSearchAndCluster";
 
 /** Toggle pieces of the pipeline as each teammate ships their slice. */
@@ -87,8 +88,15 @@ export async function placeholder_extractSearchableTextFromImage(
 ): Promise<string> {
   if (!PLACEHOLDER_FLAGS.useVisionTextExtraction) return "";
   const apiKey = process.env.EXPO_PUBLIC_ANTHROPIC_API_KEY;
-  if (!apiKey) return "";
-  const base64 = await FileSystem.readAsStringAsync(localFileUri, {
+  if (!apiKey) throw new Error("EXPO_PUBLIC_ANTHROPIC_API_KEY is not set");
+
+  // Resize to max 1568px and compress to stay under Anthropic's 5MB image limit
+  const resized = await ImageManipulator.manipulateAsync(
+    localFileUri,
+    [{ resize: { width: 1568 } }],
+    { compress: 0.8, format: ImageManipulator.SaveFormat.JPEG },
+  );
+  const base64 = await FileSystem.readAsStringAsync(resized.uri, {
     encoding: FileSystem.EncodingType.Base64,
   });
   const res = await fetch("https://api.anthropic.com/v1/messages", {
