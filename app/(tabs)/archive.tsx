@@ -20,7 +20,7 @@ import { decode } from "base64-arraybuffer";
 import * as FileSystem from "expo-file-system/legacy";
 import * as ImagePicker from "expo-image-picker";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Alert, Image, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, Text, TextInput, View } from "react-native";
+import { Alert, Image, KeyboardAvoidingView, Modal, Platform, Pressable, RefreshControl, ScrollView, Text, TextInput, View } from "react-native";
 import type { ImageSourcePropType } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
@@ -54,6 +54,7 @@ export default function ArchiveTab() {
   const [captionDraft, setCaptionDraft] = useState("");
   const [isUploading, setIsUploading] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [isRefreshing, setIsRefreshing] = useState(false);
 
   useEffect(() => {
     void loadSupplementalSearchText().then(setSupplementalSearchById);
@@ -319,7 +320,19 @@ export default function ArchiveTab() {
   return (
     <View className="flex-1 bg-white">
       <SafeAreaView className="flex-1 bg-white">
-        <ScrollView contentContainerClassName="px-5 pb-8" keyboardShouldPersistTaps="handled">
+        <ScrollView
+          contentContainerClassName="px-5 pb-8"
+          keyboardShouldPersistTaps="handled"
+          refreshControl={
+            <RefreshControl
+              refreshing={isRefreshing}
+              onRefresh={() => {
+                setIsRefreshing(true);
+                void loadItems().finally(() => setIsRefreshing(false));
+              }}
+            />
+          }
+        >
           <View className="flex-row items-center justify-between pt-3">
             <Text className="text-4xl font-black text-black">Archive</Text>
             <Pressable
