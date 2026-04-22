@@ -1,7 +1,23 @@
+import { useAuth } from "@/lib/auth";
 import { venn } from "@/lib/vennTheme";
-import { Tabs } from "expo-router";
+import { Redirect, Tabs } from "expo-router";
+import { ActivityIndicator, View } from "react-native";
 
 export default function TabsLayout() {
+  const { session, isLoading } = useAuth();
+
+  if (isLoading) {
+    return (
+      <View className="flex-1 items-center justify-center bg-[#F4F0EA]">
+        <ActivityIndicator size="small" color="#0B0B0B" />
+      </View>
+    );
+  }
+
+  if (!session) {
+    return <Redirect href="/auth" />;
+  }
+
   return (
     <Tabs
       screenOptions={{

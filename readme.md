@@ -1,6 +1,7 @@
 Siya Goel
 Medhya Goel
 Andreas Lorgen
+J Yim
 
 ## Image chatbot prototype
 
@@ -31,7 +32,10 @@ This repo also contains a **React Native (Expo Router)** client under `app/`. It
 
 1. Use **Node 20+** (see `package.json` `engines` and optional `.nvmrc`).
 2. `npm install`
-3. `npm start`, then open in **Expo Go**, or press `i` / `a` / `w` for simulator / web.
+3. Copy `.env.example` to `.env` and set:
+   - `EXPO_PUBLIC_SUPABASE_URL`
+   - `EXPO_PUBLIC_SUPABASE_ANON_KEY`
+4. `npm start`, then open in **Expo Go**, or press `i` / `a` / `w` for simulator / web.
 
 ### Library search (what it does right now)
 

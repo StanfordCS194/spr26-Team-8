@@ -8,3 +8,12 @@ node_modules/
 .expo/
 .venv/
 .env
+.env.*
+*.env
+*.pem
+*.key
+*.p12
+*.p8
+.ipynb_checkpoints/
+__pycache__/
+CLAUDE.local.md
