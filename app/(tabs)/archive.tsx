@@ -17,6 +17,7 @@ import {
 } from "@/lib/teamIntegrationPlaceholders";
 import { supabase } from "@/lib/supabase";
 import { decode } from "base64-arraybuffer";
+import * as Crypto from "expo-crypto";
 import * as FileSystem from "expo-file-system/legacy";
 import * as ImagePicker from "expo-image-picker";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -206,18 +207,22 @@ export default function ArchiveTab() {
       });
       const arrayBuffer = decode(base64);
 
-      const { data: existingFile } = await supabase
-        .from("files")
-        .select("file_id")
+      const contentHash = await Crypto.digestStringAsync(
+        Crypto.CryptoDigestAlgorithm.SHA256,
+        base64,
+      );
+
+      const { data: existingMemory } = await supabase
+        .from("memories")
+        .select("memory_id")
         .eq("user_id", user.id)
-        .eq("byte_size", arrayBuffer.byteLength)
-        .eq("mime_type", contentType)
-        .maybeSingle();
-      if (existingFile) return fail("This photo has already been uploaded.");
+        .eq("source", `camera_roll:${contentHash}`)
+        .limit(1);
+      if (existingMemory && existingMemory.length > 0) return fail("This photo has already been uploaded.");
 
       const { data: memoryRow } = await supabase
         .from("memories")
-        .insert({ user_id: user.id, source: "camera_roll", user_caption: caption.trim() || null })
+        .insert({ user_id: user.id, source: `camera_roll:${contentHash}`, user_caption: caption.trim() || null })
         .select("memory_id")
         .single();
       if (!memoryRow) return fail("Could not create memory record.");
