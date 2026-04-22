@@ -266,8 +266,8 @@ export default function ArchiveTab() {
             .update({ ocr_description: visionText })
             .eq("memory_id", memoryRow.memory_id);
           setSupplementalSearchById(await upsertSupplementalSearchText(newId, visionText));
-        } catch {
-          /* vision pipeline optional */
+        } catch (err) {
+          console.warn("[vision] description extraction failed:", err);
         }
       })();
     } catch {
