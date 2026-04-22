@@ -201,19 +201,21 @@ export default function ArchiveTab() {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return fail("Could not identify the current user.");
 
+      if (asset.fileName) {
+        const sanitizedName = asset.fileName.replace(/[^\w.\-]/g, "_");
+        const { data: existing } = await supabase
+          .from("files")
+          .select("file_id")
+          .eq("user_id", user.id)
+          .ilike("file_name", `%-${sanitizedName}`)
+          .limit(1);
+        if (existing && existing.length > 0) return fail("This photo has already been uploaded.");
+      }
+
       const base64 = await FileSystem.readAsStringAsync(asset.uri, {
         encoding: FileSystem.EncodingType.Base64,
       });
       const arrayBuffer = decode(base64);
-
-      const { data: existingFile } = await supabase
-        .from("files")
-        .select("file_id")
-        .eq("user_id", user.id)
-        .eq("byte_size", arrayBuffer.byteLength)
-        .eq("mime_type", contentType)
-        .maybeSingle();
-      if (existingFile) return fail("This photo has already been uploaded.");
 
       const { data: memoryRow } = await supabase
         .from("memories")
@@ -300,20 +302,24 @@ export default function ArchiveTab() {
     try {
       const { data: memory } = await supabase
         .from("memories")
-        .select("file_id, files(storage_path)")
+        .select("file_id")
         .eq("memory_id", memoryId)
         .single();
 
-      if (memory) {
-        const file = Array.isArray(memory.files) ? memory.files[0] : memory.files;
-        if (file?.storage_path) {
-          await supabase.storage.from("memories").remove([file.storage_path]);
+      if (memory?.file_id) {
+        const { data: fileRecord, error: fileError } = await supabase
+          .from("files")
+          .select("storage_path")
+          .eq("file_id", memory.file_id)
+          .single();
+
+        if (fileRecord?.storage_path) {
+          await supabase.storage.from("memories").remove([fileRecord.storage_path]);
         }
-        if (memory.file_id) {
-          await supabase.from("files").delete().eq("file_id", memory.file_id);
-        }
-        await supabase.from("memories").delete().eq("memory_id", memoryId);
+
+        await supabase.from("files").delete().eq("file_id", memory.file_id);
       }
+      await supabase.from("memories").delete().eq("memory_id", memoryId);
 
       const updated = await removeSupplementalSearchText(selectedItem.id);
       setSupplementalSearchById(updated);
