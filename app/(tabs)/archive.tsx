@@ -314,14 +314,7 @@ export default function ArchiveTab() {
           .single();
 
         if (fileRecord?.storage_path) {
-          console.log("[delete] removing storage path:", fileRecord.storage_path);
-          const { error: storageError, data: storageData } = await supabase.storage
-            .from("memories")
-            .remove([fileRecord.storage_path]);
-          console.log("[delete] storage result:", storageData, storageError);
-          if (storageError) console.error("[delete] storage remove failed:", storageError);
-        } else {
-          console.error("[delete] could not get storage_path:", fileError);
+          await supabase.storage.from("memories").remove([fileRecord.storage_path]);
         }
 
         await supabase.from("files").delete().eq("file_id", memory.file_id);
