@@ -117,7 +117,7 @@ export async function placeholder_extractSearchableTextFromImage(
               type: "image",
               source: {
                 type: "base64",
-                media_type: ctx.mimeType,
+                media_type: "image/jpeg",
                 data: base64,
               },
             },
