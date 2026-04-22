@@ -3,6 +3,7 @@
  * Flip flags in PLACEHOLDER_FLAGS to opt into behavior while implementations are WIP.
  */
 
+import * as FileSystem from "expo-file-system/legacy";
 import type { ArchiveItemMeta } from "@/lib/archiveSearchAndCluster";
 
 /** Toggle pieces of the pipeline as each teammate ships their slice. */
@@ -16,10 +17,10 @@ export const PLACEHOLDER_FLAGS = {
   /** Siya / chat: call real generative endpoint instead of canned text */
   useGenerativeChatApi: false,
   /**
-   * Vision / OCR — run after image save; text is merged into search via `searchableTextById`.
-   * Leave false until you have a backend or native pipeline (on-device OCR in Expo usually needs a dev client + native module, or a cloud Vision API).
+   * Vision / OCR — calls Claude Haiku with the image and stores the description in
+   * memories.ocr_description and the local search index.
    */
-  useVisionTextExtraction: false,
+  useVisionTextExtraction: true,
 } as const;
 
 export type ArchiveIdRef = { id: string; fileName: string };
@@ -29,7 +30,7 @@ export type ArchiveIdRef = { id: string; fileName: string };
  * Return only fields you have; empty object = keep local filename-only tags.
  */
 export async function placeholder_fetchRemoteArchiveMeta(
-  _items: ArchiveIdRef[]
+  _items: ArchiveIdRef[],
 ): Promise<Record<string, Partial<ArchiveItemMeta>>> {
   if (!PLACEHOLDER_FLAGS.useRemoteArchiveMeta) return {};
   // Example future shape:
@@ -42,7 +43,7 @@ export async function placeholder_fetchRemoteArchiveMeta(
  * Empty object = use local keyword-based `inferTheme` only.
  */
 export async function placeholder_fetchEmbeddingThemeOverrides(
-  _items: ArchiveIdRef[]
+  _items: ArchiveIdRef[],
 ): Promise<Record<string, string>> {
   if (!PLACEHOLDER_FLAGS.useEmbeddingThemeOverrides) return {};
   return {};
@@ -51,7 +52,9 @@ export async function placeholder_fetchEmbeddingThemeOverrides(
 /**
  * TODO: Medhya — `payload` matches `archiveIndexForBackend` rows; fire-and-forget is fine.
  */
-export async function placeholder_notifyArchiveIndexUpdated(_payload: unknown): Promise<void> {
+export async function placeholder_notifyArchiveIndexUpdated(
+  _payload: unknown,
+): Promise<void> {
   if (!PLACEHOLDER_FLAGS.usePushArchiveIndex) return;
 }
 
@@ -59,7 +62,9 @@ export async function placeholder_notifyArchiveIndexUpdated(_payload: unknown): 
  * TODO: Siya — replace with fetch to your chat / completions route (body + user id + context).
  * For now returns canned copy so the Action UI can be exercised without a server.
  */
-export async function placeholder_sendChatMessage(userText: string): Promise<string> {
+export async function placeholder_sendChatMessage(
+  userText: string,
+): Promise<string> {
   if (!PLACEHOLDER_FLAGS.useGenerativeChatApi) {
     return `[Placeholder] Echo: ${userText.trim() || "(empty)"}\n\nWire useGenerativeChatApi + your API in lib/teamIntegrationPlaceholders.ts.`;
   }
@@ -69,22 +74,54 @@ export async function placeholder_sendChatMessage(userText: string): Promise<str
 export type VisionExtractContext = {
   id: string;
   fileName: string;
+  mimeType: string;
 };
 
 /**
- * TODO: Aaron / backend — OCR + optional scene / object labels from `localFileUri` (file://).
- * Return plain text only; it is folded into the same search index as filenames and tags.
- *
- * Practical options later:
- * - Server: send image to Vision API, GPT-4o/mini vision, or your embedding+caption service.
- * - Native (non–managed Expo): Apple Vision, ML Kit, etc. via config plugin / dev client.
- *
- * When `useVisionTextExtraction` is false, returns "" (no work, no cost).
+ * Sends the image to Claude Haiku and returns a plain-text description for search indexing.
+ * Result is stored in memories.ocr_description and merged into the local search blob.
  */
 export async function placeholder_extractSearchableTextFromImage(
-  _localFileUri: string,
-  _ctx: VisionExtractContext
+  localFileUri: string,
+  ctx: VisionExtractContext,
 ): Promise<string> {
   if (!PLACEHOLDER_FLAGS.useVisionTextExtraction) return "";
-  return "";
+  const apiKey = process.env.EXPO_PUBLIC_ANTHROPIC_API_KEY;
+  if (!apiKey) return "";
+  const base64 = await FileSystem.readAsStringAsync(localFileUri, {
+    encoding: FileSystem.EncodingType.Base64,
+  });
+  const res = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: {
+      "x-api-key": apiKey,
+      "anthropic-version": "2023-06-01",
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      model: "claude-haiku-4-5-20251001",
+      max_tokens: 512,
+      messages: [
+        {
+          role: "user",
+          content: [
+            {
+              type: "image",
+              source: {
+                type: "base64",
+                media_type: ctx.mimeType,
+                data: base64,
+              },
+            },
+            {
+              type: "text",
+              text: "Return a comma separated list of tags and/or description of the image",
+            },
+          ],
+        },
+      ],
+    }),
+  });
+  const json = (await res.json()) as { content?: { text?: string }[] };
+  return json.content?.[0]?.text ?? "";
 }
