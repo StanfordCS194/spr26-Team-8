@@ -201,6 +201,20 @@ export default function ArchiveTab() {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return fail("Could not identify the current user.");
 
+      const base64 = await FileSystem.readAsStringAsync(asset.uri, {
+        encoding: FileSystem.EncodingType.Base64,
+      });
+      const arrayBuffer = decode(base64);
+
+      const { data: existingFile } = await supabase
+        .from("files")
+        .select("file_id")
+        .eq("user_id", user.id)
+        .eq("byte_size", arrayBuffer.byteLength)
+        .eq("mime_type", contentType)
+        .maybeSingle();
+      if (existingFile) return fail("This photo has already been uploaded.");
+
       const { data: memoryRow } = await supabase
         .from("memories")
         .insert({ user_id: user.id, source: "camera_roll", user_caption: caption.trim() || null })
@@ -211,11 +225,6 @@ export default function ArchiveTab() {
       const storagePath = `${user.id}/${memoryRow.memory_id}/${fileName}`;
       const cleanupMemory = () =>
         supabase.from("memories").delete().eq("memory_id", memoryRow.memory_id);
-
-      const base64 = await FileSystem.readAsStringAsync(asset.uri, {
-        encoding: FileSystem.EncodingType.Base64,
-      });
-      const arrayBuffer = decode(base64);
 
       const { error: uploadError } = await supabase.storage
         .from("memories")
