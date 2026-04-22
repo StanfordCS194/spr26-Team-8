@@ -236,41 +236,45 @@ export default function ArchiveTab() {
   };
 
   return (
-    <View className="flex-1 bg-white">
-      <SafeAreaView className="flex-1 bg-white">
-        <ScrollView contentContainerClassName="px-5 pb-8" keyboardShouldPersistTaps="handled">
-          <Text className="pt-3 text-4xl font-black text-black">Archive</Text>
+    <View className="flex-1 bg-[#F4F0EA]">
+      <SafeAreaView className="flex-1 bg-[#F4F0EA]">
+        <ScrollView
+          contentContainerClassName="items-start px-5 pb-8"
+          keyboardShouldPersistTaps="handled"
+        >
+          <View className="w-full items-start gap-1 pt-1.5">
+            <Text className="text-sm font-medium text-[#5F5F5F]">Your saves</Text>
+            <Text className="text-4xl font-bold tracking-[-0.5px] text-[#0B0B0B]">Library</Text>
+          </View>
           <Pressable
-            className="mt-4 items-center rounded-2xl bg-blue-500 px-5 py-4"
+            className="mt-3 items-center rounded-3xl bg-[#0B0B0B] px-5 py-3.5 active:opacity-90"
             onPress={handleUpload}
           >
-            <Text className="text-lg font-black text-white">Upload</Text>
+            <Text className="text-base font-semibold text-white">Add to library</Text>
           </Pressable>
-          <Text className="pt-3 text-sm text-gray-500">
-            Upload screenshots, files, notes, and more.
+          <Text className="pt-3 text-sm leading-5 text-[#5F5F5F]">
+            Add photos (more modalities soon). Your library stays on-device for now.
           </Text>
 
-          <View className="mt-4 rounded-2xl border border-gray-200 bg-gray-50 px-4 py-2">
+          <View className="mt-4 rounded-3xl border border-[#E6E1DA] bg-white px-4 py-2 shadow-sm">
             <TextInput
               value={searchQuery}
               onChangeText={setSearchQuery}
-              placeholder="Search names, tags, themes…"
-              placeholderTextColor="#9CA3AF"
-              className="py-2 text-base text-black"
+              placeholder="Search titles, tags, categories…"
+              placeholderTextColor="rgba(95, 95, 95, 0.55)"
+              className="py-2 text-base text-[#0B0B0B]"
               autoCapitalize="none"
               autoCorrect={false}
               clearButtonMode="while-editing"
             />
           </View>
-          <Text className="mt-1 text-xs text-gray-400">
-            All words must match. Stronger matches (file name, exact tags) sort first. OCR / in-image text can
-            merge into the same index — enable{" "}
-            <Text className="font-mono text-gray-500">useVisionTextExtraction</Text> in
-            teamIntegrationPlaceholders when your vision backend or native module is ready.
+          <Text className="mt-2 text-xs leading-4 text-[#6B6B6B]">
+            Search uses <Text className="font-semibold text-[#0B0B0B]">all words</Text> (AND). Results rank
+            filename and tag hits above loose matches. In-image text can plug in later.
           </Text>
 
-          <Text className="mt-2 text-xs font-semibold uppercase tracking-wide text-gray-400">
-            Clusters (auto from filenames)
+          <Text className="mt-4 text-xs font-semibold uppercase tracking-[0.2em] text-[#6B6B6B]">
+            Categories
           </Text>
           <ScrollView
             horizontal
@@ -281,12 +285,12 @@ export default function ArchiveTab() {
             <Pressable
               onPress={() => setThemeFilter("all")}
               className={`rounded-full px-4 py-2 ${
-                themeFilter === "all" ? "bg-black" : "border border-gray-200 bg-white"
+                themeFilter === "all" ? "bg-[#0B0B0B]" : "border border-[#E6E1DA] bg-white"
               }`}
             >
               <Text
-                className={`text-sm font-black ${
-                  themeFilter === "all" ? "text-white" : "text-gray-800"
+                className={`text-sm font-semibold ${
+                  themeFilter === "all" ? "text-white" : "text-[#0B0B0B]"
                 }`}
               >
                 All
@@ -299,12 +303,12 @@ export default function ArchiveTab() {
                   key={theme}
                   onPress={() => setThemeFilter(active ? "all" : theme)}
                   className={`rounded-full px-4 py-2 ${
-                    active ? "bg-blue-500" : "border border-gray-200 bg-white"
+                    active ? "bg-[#0B0B0B]" : "border border-[#E6E1DA] bg-white"
                   }`}
                 >
                   <Text
-                    className={`text-sm font-black capitalize ${
-                      active ? "text-white" : "text-gray-800"
+                    className={`text-sm font-semibold capitalize ${
+                      active ? "text-white" : "text-[#0B0B0B]"
                     }`}
                   >
                     {theme}
@@ -315,27 +319,30 @@ export default function ArchiveTab() {
           </ScrollView>
 
           {gridCells.length === 0 ? (
-            <Text className="mt-6 text-center text-sm text-gray-500">
-              Nothing matches this search or cluster. Clear filters to see everything again.
+            <Text className="mt-6 text-center text-sm text-[#5F5F5F]">
+              Nothing matches this search or filter. Try clearing the search and choosing All.
             </Text>
           ) : null}
 
           <View className="mt-5 flex-row gap-3">
             <View className="flex-1 gap-3">
               {leftColumnCells.map(({ item, highlights }) => (
-                <View key={item.id} className="overflow-hidden rounded-2xl bg-gray-100">
+                <View
+                  key={item.id}
+                  className="overflow-hidden rounded-3xl border border-[#E6E1DA] bg-white shadow-sm"
+                >
                   <Image
                     source={item.source}
                     style={{ width: "100%", height: item.height }}
                     resizeMode="cover"
                   />
                   {showMatchHints && highlights.length > 0 ? (
-                    <View className="border-t border-gray-200 bg-white px-2 py-1.5">
+                    <View className="border-t border-[#EFE8DF] bg-white px-2 py-1.5">
                       {highlights.slice(0, 2).map((h, idx) => (
                         <Text
                           key={`${item.id}-${h.kind}-${h.value}-${idx}`}
                           numberOfLines={1}
-                          className="text-[10px] font-semibold uppercase tracking-wide text-gray-500"
+                          className="text-[10px] font-semibold uppercase tracking-wide text-[#6B6B6B]"
                         >
                           {h.label}: {h.value}
                         </Text>
@@ -348,19 +355,22 @@ export default function ArchiveTab() {
 
             <View className="flex-1 gap-3">
               {rightColumnCells.map(({ item, highlights }) => (
-                <View key={item.id} className="overflow-hidden rounded-2xl bg-gray-100">
+                <View
+                  key={item.id}
+                  className="overflow-hidden rounded-3xl border border-[#E6E1DA] bg-white shadow-sm"
+                >
                   <Image
                     source={item.source}
                     style={{ width: "100%", height: item.height }}
                     resizeMode="cover"
                   />
                   {showMatchHints && highlights.length > 0 ? (
-                    <View className="border-t border-gray-200 bg-white px-2 py-1.5">
+                    <View className="border-t border-[#EFE8DF] bg-white px-2 py-1.5">
                       {highlights.slice(0, 2).map((h, idx) => (
                         <Text
                           key={`${item.id}-${h.kind}-${h.value}-${idx}`}
                           numberOfLines={1}
-                          className="text-[10px] font-semibold uppercase tracking-wide text-gray-500"
+                          className="text-[10px] font-semibold uppercase tracking-wide text-[#6B6B6B]"
                         >
                           {h.label}: {h.value}
                         </Text>
