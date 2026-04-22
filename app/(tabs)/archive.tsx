@@ -8,7 +8,7 @@ import {
   mergeArchiveMeta,
   searchAndRankArchiveRows,
 } from "@/lib/archiveSearchAndCluster";
-import { loadSupplementalSearchText, upsertSupplementalSearchText } from "@/lib/archiveSupplementalSearchText";
+import { loadSupplementalSearchText, removeSupplementalSearchText, upsertSupplementalSearchText } from "@/lib/archiveSupplementalSearchText";
 import {
   placeholder_extractSearchableTextFromImage,
   placeholder_fetchEmbeddingThemeOverrides,
@@ -53,6 +53,7 @@ export default function ArchiveTab() {
   const [pendingAsset, setPendingAsset] = useState<ImagePicker.ImagePickerAsset | null>(null);
   const [captionDraft, setCaptionDraft] = useState("");
   const [isUploading, setIsUploading] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
 
   useEffect(() => {
     void loadSupplementalSearchText().then(setSupplementalSearchById);
@@ -276,6 +277,39 @@ export default function ArchiveTab() {
     }
   };
 
+  const handleDeletePhoto = useCallback(async () => {
+    if (!selectedItem) return;
+    const memoryId = selectedItem.id.replace(/^uploaded-/, "");
+    setIsDeleting(true);
+    try {
+      const { data: memory } = await supabase
+        .from("memories")
+        .select("file_id, files(storage_path)")
+        .eq("memory_id", memoryId)
+        .single();
+
+      if (memory) {
+        const file = Array.isArray(memory.files) ? memory.files[0] : memory.files;
+        if (file?.storage_path) {
+          await supabase.storage.from("memories").remove([file.storage_path]);
+        }
+        if (memory.file_id) {
+          await supabase.from("files").delete().eq("file_id", memory.file_id);
+        }
+        await supabase.from("memories").delete().eq("memory_id", memoryId);
+      }
+
+      const updated = await removeSupplementalSearchText(selectedItem.id);
+      setSupplementalSearchById(updated);
+      setItems((prev) => prev.filter((i) => i.id !== selectedItem.id));
+      setSelectedItem(null);
+    } catch {
+      Alert.alert("Error", "Could not delete this photo.");
+    } finally {
+      setIsDeleting(false);
+    }
+  }, [selectedItem]);
+
   return (
     <View className="flex-1 bg-white">
       <SafeAreaView className="flex-1 bg-white">
@@ -417,11 +451,35 @@ export default function ArchiveTab() {
         <Modal visible={!!selectedItem} transparent animationType="fade" onRequestClose={() => setSelectedItem(null)}>
           <Pressable className="flex-1 items-center justify-center bg-black/60" onPress={() => setSelectedItem(null)}>
             {selectedItem ? (
-              <Image
-                source={selectedItem.source}
-                style={{ width: "85%", height: "70%", borderRadius: 16 }}
-                resizeMode="contain"
-              />
+              <View style={{ width: "85%", height: "70%" }}>
+                <Image
+                  source={selectedItem.source}
+                  style={{ width: "100%", height: "100%", borderRadius: 16 }}
+                  resizeMode="contain"
+                />
+                <Pressable
+                  onPress={() =>
+                    Alert.alert("Delete photo", "This will permanently delete this photo.", [
+                      { text: "Cancel", style: "cancel" },
+                      { text: "Delete", style: "destructive", onPress: () => void handleDeletePhoto() },
+                    ])
+                  }
+                  disabled={isDeleting}
+                  style={{
+                    position: "absolute",
+                    top: -14,
+                    right: -14,
+                    width: 30,
+                    height: 30,
+                    borderRadius: 15,
+                    backgroundColor: "rgba(0,0,0,0.75)",
+                    alignItems: "center",
+                    justifyContent: "center",
+                  }}
+                >
+                  <Text style={{ color: "white", fontSize: 14, fontWeight: "bold", lineHeight: 18 }}>✕</Text>
+                </Pressable>
+              </View>
             ) : null}
           </Pressable>
         </Modal>
