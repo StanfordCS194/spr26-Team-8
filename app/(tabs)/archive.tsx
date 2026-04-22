@@ -18,6 +18,7 @@ import {
 import { supabase } from "@/lib/supabase";
 import { decode } from "base64-arraybuffer";
 import * as FileSystem from "expo-file-system/legacy";
+import * as ImageManipulator from "expo-image-manipulator";
 import * as ImagePicker from "expo-image-picker";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Alert, Image, KeyboardAvoidingView, Modal, Platform, Pressable, RefreshControl, ScrollView, Text, TextInput, View } from "react-native";
@@ -40,6 +41,17 @@ type GridCell = {
 type MemoryFileRow = {
   memory_id: string;
   files: { storage_path: string } | { storage_path: string }[] | null;
+};
+
+const isJpegAsset = (mimeType?: string | null, fileName?: string | null) => {
+  const mime = (mimeType ?? "").toLowerCase();
+  const name = (fileName ?? "").toLowerCase();
+  return (
+    mime === "image/jpeg" ||
+    mime === "image/jpg" ||
+    name.endsWith(".jpeg") ||
+    name.endsWith(".jpg")
+  );
 };
 
 export default function ArchiveTab() {
@@ -195,14 +207,30 @@ export default function ArchiveTab() {
     const fail = (msg: string) => Alert.alert("Upload", msg);
     try {
       const rawName = asset.fileName || asset.uri.split("/").pop() || `upload-${Date.now()}.jpg`;
-      const fileName = `${Date.now()}-${rawName.replace(/[^\w.\-]/g, "_")}`;
-      const contentType = asset.mimeType ?? "image/jpeg";
+      const sanitizedBaseName = rawName
+        .replace(/[^\w.\-]/g, "_")
+        .replace(/\.(heic|heif|png|jpg|jpeg)$/i, "");
+      let fileName = `${Date.now()}-${rawName.replace(/[^\w.\-]/g, "_")}`;
+      let contentType = "image/jpeg";
+      let uploadUri = asset.uri;
+
+      if (!isJpegAsset(asset.mimeType, rawName)) {
+        const converted = await ImageManipulator.manipulateAsync(
+          asset.uri,
+          [],
+          { compress: 1, format: ImageManipulator.SaveFormat.JPEG }
+        );
+        uploadUri = converted.uri;
+        fileName = `${Date.now()}-${sanitizedBaseName}.jpeg`;
+      }
 
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return fail("Could not identify the current user.");
 
       if (asset.fileName) {
-        const sanitizedName = asset.fileName.replace(/[^\w.\-]/g, "_");
+        const sanitizedName = isJpegAsset(asset.mimeType, rawName)
+          ? asset.fileName.replace(/[^\w.\-]/g, "_")
+          : `${sanitizedBaseName}.jpeg`;
         const { data: existing } = await supabase
           .from("files")
           .select("file_id")
@@ -212,7 +240,7 @@ export default function ArchiveTab() {
         if (existing && existing.length > 0) return fail("This photo has already been uploaded.");
       }
 
-      const base64 = await FileSystem.readAsStringAsync(asset.uri, {
+      const base64 = await FileSystem.readAsStringAsync(uploadUri, {
         encoding: FileSystem.EncodingType.Base64,
       });
       const arrayBuffer = decode(base64);
@@ -283,9 +311,13 @@ export default function ArchiveTab() {
         return fail(`Could not generate a description for this photo: ${err instanceof Error ? err.message : "unknown error"}`);
       }
 
-      await supabase.from("memories")
+      const { error: ocrUpdateError } = await supabase.from("memories")
         .update({ ocr_description: visionText })
         .eq("memory_id", memoryRow.memory_id);
+      if (ocrUpdateError) {
+        await cleanupAll();
+        return fail("Upload succeeded but could not save OCR description.");
+      }
       setSupplementalSearchById(await upsertSupplementalSearchText(newId, visionText));
       void loadItems();
     } catch {
