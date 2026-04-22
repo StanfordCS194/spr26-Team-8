@@ -122,6 +122,12 @@ export async function placeholder_extractSearchableTextFromImage(
       ],
     }),
   });
+  if (!res.ok) {
+    const errBody = (await res.json().catch(() => ({}))) as { error?: { message?: string } };
+    throw new Error(`Vision API error ${res.status}: ${errBody.error?.message ?? "unknown error"}`);
+  }
   const json = (await res.json()) as { content?: { text?: string }[] };
-  return json.content?.[0]?.text ?? "";
+  const text = json.content?.[0]?.text;
+  if (!text) throw new Error("Vision API returned no content");
+  return text;
 }
