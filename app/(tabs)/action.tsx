@@ -25,11 +25,13 @@ export default function ActionTab() {
     },
   ]);
   const [sending, setSending] = useState(false);
+  const [showQuickActions, setShowQuickActions] = useState(true);
   const scrollRef = useRef<ScrollView>(null);
 
   const appendExchange = useCallback(async (userText: string) => {
     const trimmed = userText.trim();
     if (!trimmed || sending) return;
+    setShowQuickActions(false);
     setSending(true);
     setMessages((m) => [...m, { role: "user", text: trimmed }]);
     try {
@@ -102,23 +104,22 @@ export default function ActionTab() {
             ) : null}
           </ScrollView>
 
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            className="border-t border-[#EFE8DF] bg-[#F4F0EA] px-3 pt-2"
-            contentContainerClassName="flex-row gap-2 pr-2"
-          >
-            {PLACEHOLDER_CHAT_PROMPTS.map((label) => (
-              <Pressable
-                key={label}
-                onPress={() => void appendExchange(label)}
-                disabled={sending}
-                className="rounded-full border border-[#E6E1DA] bg-white px-3 py-2 active:opacity-70"
-              >
-                <Text className="text-xs font-semibold text-[#0B0B0B]">{label}</Text>
-              </Pressable>
-            ))}
-          </ScrollView>
+          {showQuickActions ? (
+            <View className="border-t border-[#EFE8DF] bg-[#F4F0EA] px-4 pb-2 pt-3">
+              <View className="gap-3">
+                {PLACEHOLDER_CHAT_PROMPTS.map((label) => (
+                  <Pressable
+                    key={label}
+                    onPress={() => void appendExchange(label)}
+                    disabled={sending}
+                    className="min-h-[150px] w-full justify-start rounded-[36px] border border-[#D9D2C7] bg-white px-5 py-4 shadow-sm active:opacity-70"
+                  >
+                    <Text className="text-xl font-semibold leading-7 text-[#0B0B0B]">{label}</Text>
+                  </Pressable>
+                ))}
+              </View>
+            </View>
+          ) : null}
         </SafeAreaView>
 
         <View className="bg-[#F4F0EA] px-3 pb-4 pt-2">
