@@ -37,9 +37,9 @@ This repo also contains a **React Native (Expo Router)** client under `app/`. It
    - `EXPO_PUBLIC_SUPABASE_ANON_KEY`
 4. `npm start`, then open in **Expo Go**, or press `i` / `a` / `w` for simulator / web.
 
-### Archive search (what it does right now)
+### Library search (what it does right now)
 
-Search and light “clustering” for the **Archive** tab live in `lib/archiveSearchAndCluster.ts`. Data is **on-device** unless teammates wire the placeholders.
+Search and light “clustering” for the **Library** tab (`app/(tabs)/archive.tsx`) live in `lib/archiveSearchAndCluster.ts`. Data is **on-device** unless teammates wire the integration hooks in `lib/teamIntegrationPlaceholders.ts`.
 
 | Piece | Behavior |
 | ----- | -------- |

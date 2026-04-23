@@ -21,7 +21,7 @@ export default function Index() {
   }, [isLoading, session]);
 
   return (
-    <View className="flex-1 items-center justify-center bg-white">
+    <View className="flex-1 items-center justify-center bg-[#F4F0EA]">
       <View className="flex-row items-end">
         <Text className="text-[84px] font-black leading-[92px] tracking-[1px] text-blue-500">
           V
@@ -36,11 +36,11 @@ export default function Index() {
           n
         </Text>
       </View>
-      <Text className="mt-3 text-base font-black uppercase tracking-[1.5px] text-black">
-        Loading...
+      <Text className="mt-3 text-sm font-semibold tracking-[2px] text-[#5F5F5F]">
+        Loading
       </Text>
       <View className="mt-2.5">
-        <ActivityIndicator size="small" color="black" />
+        <ActivityIndicator size="small" color="#0B0B0B" />
       </View>
     </View>
   );

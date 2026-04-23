@@ -1,4 +1,5 @@
 import { PLACEHOLDER_CHAT_PROMPTS } from "@/lib/chatPromptPlaceholders";
+import { posthog } from "@/lib/posthog";
 import { placeholder_sendChatMessage } from "@/lib/teamIntegrationPlaceholders";
 import { Ionicons } from "@expo/vector-icons";
 import { useCallback, useRef, useState } from "react";
@@ -21,26 +22,34 @@ export default function ActionTab() {
   const [messages, setMessages] = useState<ChatMessage[]>([
     {
       role: "assistant",
-      text: "Placeholder chat — connect `placeholder_sendChatMessage` to your API in lib/teamIntegrationPlaceholders.ts.",
+      text: "I can help plan from your uploaded memories. Try one of the quick actions below.",
     },
   ]);
   const [sending, setSending] = useState(false);
+  const [showQuickActions, setShowQuickActions] = useState(true);
   const scrollRef = useRef<ScrollView>(null);
+  // stable session ID for grouping messages in PostHog
+  const chatSessionId = useRef(`chat-${Date.now()}`).current;
 
   const appendExchange = useCallback(async (userText: string) => {
     const trimmed = userText.trim();
     if (!trimmed || sending) return;
+    setShowQuickActions(false);
     setSending(true);
     setMessages((m) => [...m, { role: "user", text: trimmed }]);
+    posthog.capture("chat_message_sent", { chat_session_id: chatSessionId });
     try {
       const reply = await placeholder_sendChatMessage(trimmed);
       setMessages((m) => [...m, { role: "assistant", text: reply }]);
-    } catch {
+    } catch (err) {
       setMessages((m) => [
         ...m,
         {
           role: "assistant",
-          text: "[Placeholder] Chat request failed — add error handling when you integrate the real API.",
+          text:
+            err instanceof Error
+              ? `Sorry, I could not generate a response: ${err.message}`
+              : "Sorry, I could not generate a response right now.",
         },
       ]);
     } finally {
@@ -51,17 +60,18 @@ export default function ActionTab() {
 
   return (
     <KeyboardAvoidingView
-      className="flex-1 bg-white"
+      className="flex-1 bg-[#F4F0EA]"
       behavior={Platform.OS === "ios" ? "padding" : undefined}
     >
-      <View className="flex-1 bg-white">
+      <View className="flex-1 bg-[#F4F0EA]">
         <SafeAreaView
-          className="flex-1 bg-white"
+          className="flex-1 bg-[#F4F0EA]"
           edges={["top", "left", "right"]}
         >
-          <Text className="px-5 pt-3 text-4xl font-black text-black">Action</Text>
-          <Text className="px-5 pb-2 pt-1 text-xs font-semibold uppercase tracking-wide text-gray-400">
-            Generative chat (placeholder)
+          <Text className="px-5 pt-2 text-sm font-medium text-[#5F5F5F]">Assistant</Text>
+          <Text className="px-5 pt-1 text-4xl font-bold tracking-[-0.5px] text-[#0B0B0B]">Action</Text>
+          <Text className="px-5 pb-2 pt-1 text-xs font-medium uppercase tracking-[0.2em] text-[#6B6B6B]">
+            Memory-aware assistant
           </Text>
 
           <ScrollView
@@ -75,15 +85,15 @@ export default function ActionTab() {
             {messages.map((msg, i) => (
               <View
                 key={`${i}-${msg.role}`}
-                className={`mb-3 max-w-[92%] rounded-2xl px-4 py-3 ${
+                className={`mb-3 max-w-[92%] rounded-3xl px-4 py-3 ${
                   msg.role === "user"
-                    ? "self-end bg-blue-500"
-                    : "self-start border border-gray-200 bg-gray-50"
+                    ? "self-end bg-[#0B0B0B]"
+                    : "self-start border border-[#E6E1DA] bg-white shadow-sm"
                 }`}
               >
                 <Text
                   className={`text-base leading-6 ${
-                    msg.role === "user" ? "text-white" : "text-gray-900"
+                    msg.role === "user" ? "text-white" : "text-[#0B0B0B]"
                   }`}
                 >
                   {msg.text}
@@ -92,47 +102,46 @@ export default function ActionTab() {
             ))}
             {sending ? (
               <View className="flex-row items-center gap-2 py-2">
-                <ActivityIndicator size="small" color="#3B82F6" />
-                <Text className="text-sm text-gray-500">Waiting (placeholder)…</Text>
+                <ActivityIndicator size="small" color="#0B0B0B" />
+                <Text className="text-sm text-[#5F5F5F]">Working…</Text>
               </View>
             ) : null}
           </ScrollView>
 
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            className="border-t border-gray-100 px-3 pt-2"
-            contentContainerClassName="flex-row gap-2 pr-2"
-          >
-            {PLACEHOLDER_CHAT_PROMPTS.map((label) => (
-              <Pressable
-                key={label}
-                onPress={() => void appendExchange(label)}
-                disabled={sending}
-                className="rounded-full border border-gray-200 bg-white px-3 py-2 active:opacity-70"
-              >
-                <Text className="text-xs font-bold text-gray-800">{label}</Text>
-              </Pressable>
-            ))}
-          </ScrollView>
+          {showQuickActions ? (
+            <View className="border-t border-[#EFE8DF] bg-[#F4F0EA] px-4 pb-2 pt-3">
+              <View className="gap-3">
+                {PLACEHOLDER_CHAT_PROMPTS.map((label) => (
+                  <Pressable
+                    key={label}
+                    onPress={() => void appendExchange(label)}
+                    disabled={sending}
+                    className="min-h-[150px] w-full justify-start rounded-[36px] border border-[#D9D2C7] bg-white px-5 py-4 shadow-sm active:opacity-70"
+                  >
+                    <Text className="text-xl font-semibold leading-7 text-[#0B0B0B]">{label}</Text>
+                  </Pressable>
+                ))}
+              </View>
+            </View>
+          ) : null}
         </SafeAreaView>
 
-        <View className="bg-white px-3 pb-4 pt-2">
+        <View className="bg-[#F4F0EA] px-3 pb-4 pt-2">
           <View className="flex-row items-center gap-2">
             <Pressable
               accessibilityRole="button"
-              className="h-9 w-9 items-center justify-center rounded-full bg-gray-200 active:opacity-70"
+              className="h-9 w-9 items-center justify-center rounded-full border border-[#E6E1DA] bg-white active:opacity-70"
             >
-              <Ionicons name="add" size={24} color="#374151" />
+              <Ionicons name="add" size={24} color="#0B0B0B" />
             </Pressable>
 
-            <View className="min-h-[44px] flex-1 flex-row items-center rounded-full border border-gray-200 bg-gray-100 px-4 py-1">
+            <View className="min-h-[44px] flex-1 flex-row items-center rounded-full border border-[#E6E1DA] bg-[#F0EBE3] px-4 py-1">
               <TextInput
                 value={input}
                 onChangeText={setInput}
                 placeholder="What would you like to do today?"
-                placeholderTextColor="#9CA3AF"
-                className="min-h-[36px] flex-1 py-2 text-base text-black"
+                placeholderTextColor="rgba(95, 95, 95, 0.55)"
+                className="min-h-[36px] flex-1 py-2 text-base text-[#0B0B0B]"
                 editable={!sending}
                 onSubmitEditing={() => {
                   void appendExchange(input);
@@ -145,7 +154,7 @@ export default function ActionTab() {
                 className="ml-1 p-1 active:opacity-70"
                 hitSlop={8}
               >
-                <Ionicons name="mic-outline" size={22} color="#9CA3AF" />
+                <Ionicons name="mic-outline" size={22} color="rgba(95, 95, 95, 0.55)" />
               </Pressable>
             </View>
 
@@ -156,7 +165,7 @@ export default function ActionTab() {
                 setInput("");
               }}
               disabled={sending || !input.trim()}
-              className="h-9 w-9 items-center justify-center rounded-full bg-blue-500 active:opacity-80 disabled:opacity-40"
+              className="h-9 w-9 items-center justify-center rounded-full bg-[#0B0B0B] active:opacity-80 disabled:opacity-40"
             >
               <Ionicons name="send" size={18} color="#FFFFFF" />
             </Pressable>

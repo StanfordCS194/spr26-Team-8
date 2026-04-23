@@ -5,5 +5,4 @@
 export const PLACEHOLDER_CHAT_PROMPTS = [
   "Create a bucket list for this weekend",
   "Draft a short weekend itinerary",
-  "Write a profile blurb from my saved interests",
 ] as const;

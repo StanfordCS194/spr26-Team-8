@@ -1,4 +1,5 @@
 import { useAuth } from "@/lib/auth";
+import { venn } from "@/lib/vennTheme";
 import { Redirect, Tabs } from "expo-router";
 import { ActivityIndicator, View } from "react-native";
 
@@ -7,8 +8,8 @@ export default function TabsLayout() {
 
   if (isLoading) {
     return (
-      <View className="flex-1 items-center justify-center bg-white">
-        <ActivityIndicator size="small" color="#3B82F6" />
+      <View className="flex-1 items-center justify-center bg-[#F4F0EA]">
+        <ActivityIndicator size="small" color="#0B0B0B" />
       </View>
     );
   }
@@ -21,14 +22,14 @@ export default function TabsLayout() {
     <Tabs
       screenOptions={{
         headerShown: false,
-        tabBarActiveTintColor: "#3B82F6",
-        tabBarInactiveTintColor: "#9CA3AF",
+        tabBarActiveTintColor: venn.text,
+        tabBarInactiveTintColor: "rgba(95, 95, 95, 0.75)",
         tabBarStyle: {
-          backgroundColor: "#FFFFFF",
-          borderTopColor: "#E5E7EB",
-          borderTopWidth: 1,
-          height: 72,
-          paddingBottom: 0,
+          backgroundColor: venn.tabBar,
+          borderTopColor: venn.hairline,
+          borderTopWidth: 0.5,
+          height: 78,
+          paddingBottom: 10,
           paddingTop: 10,
         },
         tabBarItemStyle: {
@@ -36,10 +37,11 @@ export default function TabsLayout() {
           alignItems: "center",
         },
         tabBarLabelStyle: {
-          fontSize: 14,
-          fontWeight: "800",
+          fontSize: 13,
+          fontWeight: "600",
           marginBottom: 0,
-          marginTop: -2,
+          marginTop: 0,
+          letterSpacing: 0.1,
         },
         tabBarIcon: () => null,
         tabBarIconStyle: {
@@ -47,7 +49,7 @@ export default function TabsLayout() {
         },
       }}
     >
-      <Tabs.Screen name="archive" options={{ title: "Archive" }} />
+      <Tabs.Screen name="archive" options={{ title: "Library" }} />
       <Tabs.Screen name="action" options={{ title: "Action" }} />
     </Tabs>
   );
