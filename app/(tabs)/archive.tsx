@@ -1,4 +1,4 @@
-import type { ArchiveItemMeta, ArchiveSearchMatchHighlight } from "@/lib/archiveSearchAndCluster";
+import type { ArchiveItemMeta } from "@/lib/archiveSearchAndCluster";
 import {
   archiveIndexForBackend,
   distinctThemes,
@@ -22,7 +22,7 @@ import { Ionicons } from "@expo/vector-icons";
 import * as FileSystem from "expo-file-system/legacy";
 import * as ImageManipulator from "expo-image-manipulator";
 import * as ImagePicker from "expo-image-picker";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert,
   AppState,
@@ -38,6 +38,7 @@ import {
   StyleSheet,
   Text,
   TextInput,
+  useWindowDimensions,
   View,
 } from "react-native";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
@@ -52,7 +53,6 @@ type BoardItem = {
 
 type GridCell = {
   item: BoardItem;
-  highlights: ArchiveSearchMatchHighlight[];
 };
 
 type MemoryFileRow = {
@@ -103,7 +103,16 @@ export default function ArchiveTab() {
   const [bulkSelectedIds, setBulkSelectedIds] = useState<string[]>([]);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [accountMenuOpen, setAccountMenuOpen] = useState(false);
+  const [accountMenuAnchor, setAccountMenuAnchor] = useState<{
+    x: number;
+    y: number;
+    w: number;
+    h: number;
+  } | null>(null);
+  const { width: windowWidth } = useWindowDimensions();
+  const settingsButtonRef = useRef<View | null>(null);
   const insets = useSafeAreaInsets();
+  const ACCOUNT_MENU_W = 208;
 
   useEffect(() => {
     void loadSupplementalSearchText().then(setSupplementalSearchById);
@@ -223,15 +232,13 @@ export default function ArchiveTab() {
       .map((result) => {
         const item = itemsById.get(result.row.id);
         if (!item) return null;
-        return { item, highlights: result.highlights };
+        return { item };
       })
       .filter((cell): cell is GridCell => Boolean(cell));
   }, [searchResults, itemsById]);
 
   const leftColumnCells = gridCells.filter((_, index) => index % 2 === 0);
   const rightColumnCells = gridCells.filter((_, index) => index % 2 === 1);
-
-  const showMatchHints = searchQuery.trim().length > 0;
 
   const handlePickImage = async () => {
     const fail = (msg: string) => Alert.alert("Upload", msg);
@@ -422,11 +429,32 @@ export default function ArchiveTab() {
     }
   }, [selectedItem, performDeleteItem]);
 
+  const closeAccountMenu = useCallback(() => {
+    setAccountMenuOpen(false);
+    setAccountMenuAnchor(null);
+  }, []);
+
+  const openSettingsMenu = useCallback(() => {
+    settingsButtonRef.current?.measureInWindow((x, y, w, h) => {
+      if (w > 0 && h > 0) {
+        setAccountMenuAnchor({ x, y, w, h });
+      } else {
+        setAccountMenuAnchor({
+          x: windowWidth - 16 - 40,
+          y: insets.top + 8,
+          w: 40,
+          h: 40,
+        });
+      }
+      setAccountMenuOpen(true);
+    });
+  }, [insets.top, windowWidth]);
+
   const clearSelection = useCallback(() => {
     setIsSelecting(false);
     setBulkSelectedIds([]);
-    setAccountMenuOpen(false);
-  }, []);
+    closeAccountMenu();
+  }, [closeAccountMenu]);
 
   const toggleBulkSelect = useCallback((id: string) => {
     setBulkSelectedIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
@@ -462,9 +490,9 @@ export default function ArchiveTab() {
 
   const enterSelectMode = useCallback(() => {
     setSelectedItem(null);
-    setAccountMenuOpen(false);
+    closeAccountMenu();
     setIsSelecting(true);
-  }, []);
+  }, [closeAccountMenu]);
 
   const allVisibleSelected =
     gridCells.length > 0 && gridCells.every((c) => bulkSelectedIds.includes(c.item.id));
@@ -477,7 +505,7 @@ export default function ArchiveTab() {
     }
   }, [allVisibleSelected, gridCells]);
 
-  const renderOneCell = ({ item, highlights }: GridCell) => {
+  const renderOneCell = ({ item }: GridCell) => {
     const selected = bulkSelectedIds.includes(item.id);
     return (
       <Pressable
@@ -509,22 +537,19 @@ export default function ArchiveTab() {
             </View>
           ) : null}
         </View>
-        {showMatchHints && highlights.length > 0 ? (
-          <View className="border-t border-[#EFE8DF] bg-white px-2 py-1.5">
-            {highlights.slice(0, 2).map((h, idx) => (
-              <Text
-                key={`${item.id}-${h.kind}-${h.value}-${idx}`}
-                numberOfLines={1}
-                className="text-[10px] font-semibold uppercase tracking-wide text-[#6B6B6B]"
-              >
-                {h.label}: {h.value}
-              </Text>
-            ))}
-          </View>
-        ) : null}
       </Pressable>
     );
   };
+
+  const accountPopoverPos = useMemo(() => {
+    if (!accountMenuAnchor) return null;
+    const GAP = 6;
+    const pad = 16;
+    const top = accountMenuAnchor.y + accountMenuAnchor.h + GAP;
+    const rawLeft = accountMenuAnchor.x + accountMenuAnchor.w - ACCOUNT_MENU_W;
+    const left = Math.max(pad, Math.min(rawLeft, windowWidth - ACCOUNT_MENU_W - pad));
+    return { left, top };
+  }, [ACCOUNT_MENU_W, accountMenuAnchor, windowWidth]);
 
   return (
     <View className="flex-1 bg-[#F4F0EA]">
@@ -535,14 +560,16 @@ export default function ArchiveTab() {
               <View className="flex-row items-center justify-between">
                 <Text className="text-sm font-medium text-[#5F5F5F]">Your saves</Text>
                 {!isSelecting ? (
-                  <Pressable
-                    accessibilityLabel="Account and settings"
-                    onPress={() => setAccountMenuOpen(true)}
-                    hitSlop={8}
-                    className="rounded-full p-1.5 active:bg-black/5"
-                  >
-                    <Ionicons name="settings-outline" size={24} color="#2C2C2C" />
-                  </Pressable>
+                  <View ref={settingsButtonRef} collapsable={false} className="rounded-full">
+                    <Pressable
+                      accessibilityLabel="Account and settings"
+                      onPress={openSettingsMenu}
+                      hitSlop={8}
+                      className="rounded-full p-1.5 active:bg-black/5"
+                    >
+                      <Ionicons name="settings-outline" size={24} color="#2C2C2C" />
+                    </Pressable>
+                  </View>
                 ) : null}
               </View>
               <View className="mt-1">
@@ -778,31 +805,53 @@ export default function ArchiveTab() {
           visible={accountMenuOpen}
           transparent
           animationType="fade"
-          onRequestClose={() => setAccountMenuOpen(false)}
+          onRequestClose={closeAccountMenu}
         >
-          <View className="flex-1 justify-end">
+          <View className="flex-1">
             <Pressable
-              className="absolute inset-0 bg-black/40"
-              onPress={() => setAccountMenuOpen(false)}
+              className="absolute inset-0 bg-black/20"
+              onPress={closeAccountMenu}
               accessibilityLabel="Close menu"
             />
-            <View
-              className="rounded-t-3xl border-t border-[#E6E1DA] bg-white"
-              style={{ paddingBottom: 12 + insets.bottom }}
-            >
-              <Text className="px-5 pb-2 pt-3 text-center text-sm font-semibold text-[#0B0B0B]">Account</Text>
-              <View className="border-t border-[#E6E1DA]">
-                <Pressable
-                  className="items-center py-3.5 active:bg-[#F4F0EA]"
-                  onPress={() => {
-                    setAccountMenuOpen(false);
-                    void supabase.auth.signOut();
-                  }}
+            {accountMenuAnchor && accountPopoverPos ? (
+              <View className="absolute inset-0" pointerEvents="box-none">
+                <View
+                  className="overflow-hidden rounded-2xl border border-[#E6E1DA] bg-white"
+                  style={[
+                    {
+                      left: accountPopoverPos.left,
+                      position: "absolute",
+                      top: accountPopoverPos.top,
+                      width: ACCOUNT_MENU_W,
+                      zIndex: 2,
+                    },
+                    Platform.select({
+                      android: { elevation: 10 },
+                      ios: {
+                        shadowColor: "#000",
+                        shadowOffset: { width: 0, height: 6 },
+                        shadowOpacity: 0.2,
+                        shadowRadius: 12,
+                      },
+                    }),
+                  ]}
                 >
-                  <Text className="text-base font-semibold text-red-500">Sign out</Text>
-                </Pressable>
+                  <Text className="border-b border-[#E6E1DA] px-3 py-1.5 text-xs font-semibold uppercase tracking-wider text-[#6B6B6B]">
+                    Account
+                  </Text>
+                  <Pressable
+                    className="px-3 py-2.5 active:bg-[#F4F0EA]"
+                    onPress={() => {
+                      closeAccountMenu();
+                      void supabase.auth.signOut();
+                    }}
+                    accessibilityLabel="Sign out"
+                  >
+                    <Text className="text-sm font-semibold text-red-500">Sign out</Text>
+                  </Pressable>
+                </View>
               </View>
-            </View>
+            ) : null}
           </View>
         </Modal>
 
