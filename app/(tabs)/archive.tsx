@@ -16,14 +16,19 @@ import {
   placeholder_notifyArchiveIndexUpdated,
 } from "@/lib/teamIntegrationPlaceholders";
 import { supabase } from "@/lib/supabase";
+import { useFocusEffect } from "@react-navigation/native";
 import { decode } from "base64-arraybuffer";
+import { Ionicons } from "@expo/vector-icons";
 import * as FileSystem from "expo-file-system/legacy";
 import * as ImageManipulator from "expo-image-manipulator";
 import * as ImagePicker from "expo-image-picker";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Alert,
+  AppState,
+  type AppStateStatus,
   Image,
+  type ImageSourcePropType,
   KeyboardAvoidingView,
   Modal,
   Platform,
@@ -35,8 +40,7 @@ import {
   TextInput,
   View,
 } from "react-native";
-import type { ImageSourcePropType } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 
 const imageHeights = [220, 280, 200, 260];
 
@@ -94,7 +98,12 @@ export default function ArchiveTab() {
   const [captionDraft, setCaptionDraft] = useState("");
   const [isUploading, setIsUploading] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [isBulkDeleting, setIsBulkDeleting] = useState(false);
+  const [isSelecting, setIsSelecting] = useState(false);
+  const [bulkSelectedIds, setBulkSelectedIds] = useState<string[]>([]);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [accountMenuOpen, setAccountMenuOpen] = useState(false);
+  const insets = useSafeAreaInsets();
 
   useEffect(() => {
     void loadSupplementalSearchText().then(setSupplementalSearchById);
@@ -117,9 +126,11 @@ export default function ArchiveTab() {
     });
     if (entries.length === 0) return setItems([]);
 
+    /** Shorter than 1h caused images to “disappear” (blank) after the URL expired. */
+    const SIGNED_URL_TTL_SEC = 60 * 60 * 24 * 7;
     const { data: signed } = await supabase.storage
       .from("memories")
-      .createSignedUrls(entries.map((e) => e.storage_path), 60 * 60);
+      .createSignedUrls(entries.map((e) => e.storage_path), SIGNED_URL_TTL_SEC);
 
     setItems(
       (signed ?? []).flatMap((s, i) =>
@@ -135,13 +146,27 @@ export default function ArchiveTab() {
   }, []);
 
   useEffect(() => {
-    void loadItems();
     const { data } = supabase.auth.onAuthStateChange((event) => {
       if (event === "SIGNED_IN" || event === "SIGNED_OUT" || event === "USER_UPDATED") {
         void loadItems();
       }
     });
     return () => data.subscription.unsubscribe();
+  }, [loadItems]);
+
+  /** Refresh file URLs and DB state when returning to this tab (signed URLs are time-limited). */
+  useFocusEffect(
+    useCallback(() => {
+      void loadItems();
+    }, [loadItems])
+  );
+
+  useEffect(() => {
+    const onChange = (state: AppStateStatus) => {
+      if (state === "active") void loadItems();
+    };
+    const sub = AppState.addEventListener("change", onChange);
+    return () => sub.remove();
   }, [loadItems]);
 
   useEffect(() => {
@@ -355,73 +380,203 @@ export default function ArchiveTab() {
     }
   };
 
-  const handleDeletePhoto = useCallback(async () => {
-    if (!selectedItem) return;
-    const memoryId = selectedItem.id.replace(/^uploaded-/, "");
-    setIsDeleting(true);
-    try {
-      const { data: memory } = await supabase
-        .from("memories")
-        .select("file_id")
-        .eq("memory_id", memoryId)
+  const performDeleteItem = useCallback(async (itemId: string) => {
+    const memoryId = itemId.replace(/^uploaded-/, "");
+    const { data: memory } = await supabase
+      .from("memories")
+      .select("file_id")
+      .eq("memory_id", memoryId)
+      .single();
+
+    if (memory?.file_id) {
+      const { data: fileRecord } = await supabase
+        .from("files")
+        .select("storage_path")
+        .eq("file_id", memory.file_id)
         .single();
 
-      if (memory?.file_id) {
-        const { data: fileRecord, error: fileError } = await supabase
-          .from("files")
-          .select("storage_path")
-          .eq("file_id", memory.file_id)
-          .single();
-
-        if (fileRecord?.storage_path) {
-          await supabase.storage.from("memories").remove([fileRecord.storage_path]);
-        }
-
-        await supabase.from("files").delete().eq("file_id", memory.file_id);
+      if (fileRecord?.storage_path) {
+        await supabase.storage.from("memories").remove([fileRecord.storage_path]);
       }
-      await supabase.from("memories").delete().eq("memory_id", memoryId);
 
-      const updated = await removeSupplementalSearchText(selectedItem.id);
-      setSupplementalSearchById(updated);
-      setItems((prev) => prev.filter((i) => i.id !== selectedItem.id));
-      setSelectedItem(null);
+      await supabase.from("files").delete().eq("file_id", memory.file_id);
+    }
+    await supabase.from("memories").delete().eq("memory_id", memoryId);
+
+    const updated = await removeSupplementalSearchText(itemId);
+    setSupplementalSearchById(updated);
+    setItems((prev) => prev.filter((i) => i.id !== itemId));
+    setSelectedItem((cur) => (cur?.id === itemId ? null : cur));
+    setBulkSelectedIds((ids) => ids.filter((x) => x !== itemId));
+  }, []);
+
+  const handleDeletePhoto = useCallback(async () => {
+    if (!selectedItem) return;
+    setIsDeleting(true);
+    try {
+      await performDeleteItem(selectedItem.id);
     } catch {
       Alert.alert("Error", "Could not delete this photo.");
     } finally {
       setIsDeleting(false);
     }
-  }, [selectedItem]);
+  }, [selectedItem, performDeleteItem]);
+
+  const clearSelection = useCallback(() => {
+    setIsSelecting(false);
+    setBulkSelectedIds([]);
+    setAccountMenuOpen(false);
+  }, []);
+
+  const toggleBulkSelect = useCallback((id: string) => {
+    setBulkSelectedIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+  }, []);
+
+  const handleBulkDelete = useCallback(() => {
+    if (bulkSelectedIds.length === 0) return;
+    const n = bulkSelectedIds.length;
+    Alert.alert("Delete photos", `Delete ${n} ${n === 1 ? "photo" : "photos"}? This can’t be undone.`, [
+      { text: "Cancel", style: "cancel" },
+      {
+        text: "Delete",
+        style: "destructive",
+        onPress: () => {
+          void (async () => {
+            setIsBulkDeleting(true);
+            const ids = [...bulkSelectedIds];
+            try {
+              for (const id of ids) {
+                await performDeleteItem(id);
+              }
+              clearSelection();
+            } catch {
+              Alert.alert("Error", "Some photos could not be deleted. Try again.");
+            } finally {
+              setIsBulkDeleting(false);
+            }
+          })();
+        },
+      },
+    ]);
+  }, [bulkSelectedIds, performDeleteItem, clearSelection]);
+
+  const enterSelectMode = useCallback(() => {
+    setSelectedItem(null);
+    setAccountMenuOpen(false);
+    setIsSelecting(true);
+  }, []);
+
+  const allVisibleSelected =
+    gridCells.length > 0 && gridCells.every((c) => bulkSelectedIds.includes(c.item.id));
+
+  const handleSelectOrDeselectAllVisible = useCallback(() => {
+    if (allVisibleSelected) {
+      setBulkSelectedIds([]);
+    } else {
+      setBulkSelectedIds(gridCells.map((c) => c.item.id));
+    }
+  }, [allVisibleSelected, gridCells]);
+
+  const renderOneCell = ({ item, highlights }: GridCell) => {
+    const selected = bulkSelectedIds.includes(item.id);
+    return (
+      <Pressable
+        key={item.id}
+        onPress={() => (isSelecting ? toggleBulkSelect(item.id) : setSelectedItem(item))}
+        onLongPress={() => {
+          if (!isSelecting) {
+            setIsSelecting(true);
+            setBulkSelectedIds([item.id]);
+          }
+        }}
+        className={`overflow-hidden rounded-3xl bg-white shadow-sm ${
+          isSelecting && selected ? "border-2 border-[#0B7AEE]" : "border border-[#E6E1DA]"
+        } ${isSelecting && !selected ? "opacity-90" : ""}`}
+      >
+        <View className="relative">
+          <Image
+            source={item.source}
+            style={{ width: "100%", height: item.height }}
+            resizeMode="cover"
+          />
+          {isSelecting ? (
+            <View className="absolute right-2 top-2 h-7 w-7 items-center justify-center rounded-full border-2 border-white bg-black/35">
+              {selected ? (
+                <Ionicons name="checkmark" size={18} color="#fff" />
+              ) : (
+                <View className="h-3.5 w-3.5 rounded-full border-2 border-white" />
+              )}
+            </View>
+          ) : null}
+        </View>
+        {showMatchHints && highlights.length > 0 ? (
+          <View className="border-t border-[#EFE8DF] bg-white px-2 py-1.5">
+            {highlights.slice(0, 2).map((h, idx) => (
+              <Text
+                key={`${item.id}-${h.kind}-${h.value}-${idx}`}
+                numberOfLines={1}
+                className="text-[10px] font-semibold uppercase tracking-wide text-[#6B6B6B]"
+              >
+                {h.label}: {h.value}
+              </Text>
+            ))}
+          </View>
+        ) : null}
+      </Pressable>
+    );
+  };
 
   return (
     <View className="flex-1 bg-[#F4F0EA]">
-      <SafeAreaView className="flex-1 bg-[#F4F0EA]">
+      <SafeAreaView className="flex-1 bg-[#F4F0EA]" edges={["top", "left", "right"]}>
         <View className="flex-1">
           <View className="px-5">
-            <View className="flex-row items-start justify-between gap-2 pt-1.5">
-              <View className="min-w-0 flex-1 items-start gap-1">
+            <View className="pt-1.5">
+              <View className="flex-row items-center justify-between">
                 <Text className="text-sm font-medium text-[#5F5F5F]">Your saves</Text>
-                <Text className="text-4xl font-bold tracking-[-0.5px] text-[#0B0B0B]">Library</Text>
+                {!isSelecting ? (
+                  <Pressable
+                    accessibilityLabel="Account and settings"
+                    onPress={() => setAccountMenuOpen(true)}
+                    hitSlop={8}
+                    className="rounded-full p-1.5 active:bg-black/5"
+                  >
+                    <Ionicons name="settings-outline" size={24} color="#2C2C2C" />
+                  </Pressable>
+                ) : null}
               </View>
-              <Pressable
-                onPress={() => void supabase.auth.signOut()}
-                className="shrink-0 rounded-full border border-[#E6E1DA] bg-white px-3 py-2 active:opacity-70"
-              >
-                <Text className="text-xs font-semibold uppercase tracking-wide text-[#5F5F5F]">Sign out</Text>
-              </Pressable>
+              <View className="mt-1">
+                <Text className="text-4xl font-bold tracking-[-0.5px] text-[#0B0B0B]">Library</Text>
+                {isSelecting ? (
+                  <Text className="pt-0.5 text-sm font-medium text-[#0B7AEE]">
+                    {bulkSelectedIds.length} selected
+                  </Text>
+                ) : null}
+              </View>
             </View>
             <Pressable
-              className="mt-3 items-center rounded-3xl bg-[#0B0B0B] px-5 py-3.5 active:opacity-90"
+              disabled={isSelecting}
+              className={`mt-3 items-center rounded-3xl px-5 py-3.5 ${
+                isSelecting ? "bg-[#0B0B0B]/35" : "bg-[#0B0B0B] active:opacity-90"
+              }`}
               onPress={() => void handlePickImage()}
             >
               <Text className="text-base font-semibold text-white">Add to library</Text>
             </Pressable>
-            <Text className="pt-3 text-sm leading-5 text-[#5F5F5F]">
+            <Text
+              className={`pt-3 text-sm leading-5 text-[#5F5F5F] ${isSelecting ? "opacity-40" : ""}`}
+            >
               Upload screenshots, files, notes, and more.
             </Text>
-            <View className="mt-4 h-12 flex-row items-center rounded-3xl border border-[#E6E1DA] bg-white px-3 shadow-sm">
+            <View
+              className={`mt-4 h-12 flex-row items-center rounded-3xl border border-[#E6E1DA] bg-white px-3 shadow-sm ${
+                isSelecting ? "opacity-40" : ""
+              }`}
+            >
               <TextInput
                 value={searchQuery}
                 onChangeText={setSearchQuery}
+                editable={!isSelecting}
                 placeholder="Search titles, tags, categories…"
                 placeholderTextColor="rgba(95, 95, 95, 0.55)"
                 multiline={false}
@@ -438,7 +593,10 @@ export default function ArchiveTab() {
 
           <ScrollView
             className="flex-1"
-            contentContainerClassName="items-start px-5 pb-8"
+            contentContainerClassName="items-start px-5"
+            contentContainerStyle={{
+              paddingBottom: 32 + (isSelecting ? 0 : insets.bottom),
+            }}
             keyboardShouldPersistTaps="handled"
             keyboardDismissMode="on-drag"
             refreshControl={
@@ -451,152 +609,201 @@ export default function ArchiveTab() {
               />
             }
           >
-            <Text className="mt-2 text-xs font-semibold uppercase tracking-[0.2em] text-[#6B6B6B]">Categories</Text>
-            <ScrollView
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              className="mt-2"
-              contentContainerClassName="flex-row gap-2 pr-1"
-            >
-              <Pressable
-                onPress={() => setThemeFilter("all")}
-                className={`rounded-full px-4 py-2 ${
-                  themeFilter === "all" ? "bg-[#0B0B0B]" : "border border-[#E6E1DA] bg-white"
-                }`}
+            <Text className="mt-4 text-xs font-semibold uppercase tracking-[0.2em] text-[#6B6B6B]">Categories</Text>
+            <View className="mt-2.5 flex-row items-center gap-2">
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                className="min-w-0 flex-1"
+                contentContainerClassName="flex-row flex-nowrap items-center gap-2 pr-1"
+                pointerEvents={isSelecting ? "none" : "auto"}
               >
-                <Text
-                  className={`text-sm font-semibold ${
-                    themeFilter === "all" ? "text-white" : "text-[#0B0B0B]"
+                <Pressable
+                  onPress={() => setThemeFilter("all")}
+                  className={`rounded-full px-4 py-2 ${
+                    themeFilter === "all" ? "bg-[#0B0B0B]" : "border border-[#E6E1DA] bg-white"
                   }`}
                 >
-                  All
-                </Text>
-              </Pressable>
-              {themeOptions.map((theme) => {
-                const active = themeFilter === theme;
-                return (
-                  <Pressable
-                    key={theme}
-                    onPress={() => setThemeFilter(active ? "all" : theme)}
-                    className={`rounded-full px-4 py-2 ${
-                      active ? "bg-[#0B0B0B]" : "border border-[#E6E1DA] bg-white"
+                  <Text
+                    className={`text-sm font-semibold ${
+                      themeFilter === "all" ? "text-white" : "text-[#0B0B0B]"
                     }`}
                   >
-                    <Text
-                      className={`text-sm font-semibold capitalize ${
-                        active ? "text-white" : "text-[#0B0B0B]"
+                    All
+                  </Text>
+                </Pressable>
+                {themeOptions.map((theme) => {
+                  const active = themeFilter === theme;
+                  return (
+                    <Pressable
+                      key={theme}
+                      onPress={() => setThemeFilter(active ? "all" : theme)}
+                      className={`rounded-full px-4 py-2 ${
+                        active ? "bg-[#0B0B0B]" : "border border-[#E6E1DA] bg-white"
                       }`}
                     >
-                      {theme}
-                    </Text>
-                  </Pressable>
-                );
-              })}
-            </ScrollView>
+                      <Text
+                        className={`text-sm font-semibold capitalize ${
+                          active ? "text-white" : "text-[#0B0B0B]"
+                        }`}
+                      >
+                        {theme}
+                      </Text>
+                    </Pressable>
+                  );
+                })}
+              </ScrollView>
+              {isSelecting || gridCells.length > 0 ? (
+                <Pressable
+                  onPress={isSelecting ? clearSelection : enterSelectMode}
+                  accessibilityLabel={isSelecting ? "Cancel selection" : "Select photos"}
+                  className="h-9 w-9 shrink-0 items-center justify-center rounded-full border border-[#DED9D0] bg-white shadow-sm active:bg-[#F0EBE2]"
+                >
+                  <Ionicons
+                    name={isSelecting ? "close" : "checkmark-circle-outline"}
+                    size={isSelecting ? 22 : 20}
+                    color={isSelecting ? "#5C534A" : "#1A1A1A"}
+                  />
+                </Pressable>
+              ) : null}
+            </View>
 
             {gridCells.length === 0 ? (
-              <Text className="mt-6 text-center text-sm text-[#5F5F5F]">
-                {items.length === 0
-                  ? "No uploads yet. Tap Add to library to add your first image."
-                  : "Nothing matches this search or filter. Try clearing the search and choosing All."}
-              </Text>
+              <View className="mt-6 items-center">
+                <Text className="text-center text-sm text-[#5F5F5F]">
+                  {items.length === 0
+                    ? "No uploads yet. Tap Add to library to add your first image."
+                    : "Nothing matches this search or filter. New uploads are often under “All” and “life” until tags catch up — or your search is hiding them."}
+                </Text>
+                {items.length > 0 && (searchQuery.trim().length > 0 || themeFilter !== "all") ? (
+                  <Pressable
+                    onPress={() => {
+                      setSearchQuery("");
+                      setThemeFilter("all");
+                    }}
+                    className="mt-3 rounded-full border border-[#DED9D0] bg-white px-4 py-2 active:bg-[#F0EBE2]"
+                  >
+                    <Text className="text-sm font-semibold text-[#0B0B0B]">Show all photos</Text>
+                  </Pressable>
+                ) : null}
+              </View>
             ) : null}
 
             <View className="mt-5 flex-row gap-3">
-              <View className="flex-1 gap-3">
-                {leftColumnCells.map(({ item, highlights }) => (
-                  <Pressable
-                    key={item.id}
-                    onPress={() => setSelectedItem(item)}
-                    className="overflow-hidden rounded-3xl border border-[#E6E1DA] bg-white shadow-sm"
-                  >
-                    <Image
-                      source={item.source}
-                      style={{ width: "100%", height: item.height }}
-                      resizeMode="cover"
-                    />
-                    {showMatchHints && highlights.length > 0 ? (
-                      <View className="border-t border-[#EFE8DF] bg-white px-2 py-1.5">
-                        {highlights.slice(0, 2).map((h, idx) => (
-                          <Text
-                            key={`${item.id}-${h.kind}-${h.value}-${idx}`}
-                            numberOfLines={1}
-                            className="text-[10px] font-semibold uppercase tracking-wide text-[#6B6B6B]"
-                          >
-                            {h.label}: {h.value}
-                          </Text>
-                        ))}
-                      </View>
-                    ) : null}
-                  </Pressable>
-                ))}
-              </View>
-              <View className="flex-1 gap-3">
-                {rightColumnCells.map(({ item, highlights }) => (
-                  <Pressable
-                    key={item.id}
-                    onPress={() => setSelectedItem(item)}
-                    className="overflow-hidden rounded-3xl border border-[#E6E1DA] bg-white shadow-sm"
-                  >
-                    <Image
-                      source={item.source}
-                      style={{ width: "100%", height: item.height }}
-                      resizeMode="cover"
-                    />
-                    {showMatchHints && highlights.length > 0 ? (
-                      <View className="border-t border-[#EFE8DF] bg-white px-2 py-1.5">
-                        {highlights.slice(0, 2).map((h, idx) => (
-                          <Text
-                            key={`${item.id}-${h.kind}-${h.value}-${idx}`}
-                            numberOfLines={1}
-                            className="text-[10px] font-semibold uppercase tracking-wide text-[#6B6B6B]"
-                          >
-                            {h.label}: {h.value}
-                          </Text>
-                        ))}
-                      </View>
-                    ) : null}
-                  </Pressable>
-                ))}
-              </View>
+              <View className="flex-1 gap-3">{leftColumnCells.map((cell) => renderOneCell(cell))}</View>
+              <View className="flex-1 gap-3">{rightColumnCells.map((cell) => renderOneCell(cell))}</View>
             </View>
           </ScrollView>
         </View>
 
+        {isSelecting ? (
+          <View
+            className="border-t border-[#E6E1DA] bg-white px-5 pt-3"
+            style={{ paddingBottom: 12 + insets.bottom }}
+          >
+            <View className="flex-row items-center justify-between gap-3">
+              <Pressable
+                onPress={handleSelectOrDeselectAllVisible}
+                className="rounded-xl py-2 active:opacity-70"
+                disabled={gridCells.length === 0}
+              >
+                <Text className="text-base font-semibold text-[#0B7AEE]">
+                  {allVisibleSelected ? "Deselect all" : "Select all"}
+                </Text>
+              </Pressable>
+              <Pressable
+                onPress={handleBulkDelete}
+                disabled={bulkSelectedIds.length === 0 || isBulkDeleting}
+                className="rounded-2xl bg-red-500 px-5 py-2.5 active:opacity-80 disabled:opacity-40"
+              >
+                <Text className="text-base font-semibold text-white">
+                  {isBulkDeleting
+                    ? "Deleting…"
+                    : bulkSelectedIds.length > 0
+                      ? `Delete (${bulkSelectedIds.length})`
+                      : "Delete"}
+                </Text>
+              </Pressable>
+            </View>
+          </View>
+        ) : null}
+
         <Modal visible={!!selectedItem} transparent animationType="fade" onRequestClose={() => setSelectedItem(null)}>
-          <Pressable className="flex-1 items-center justify-center bg-black/60" onPress={() => setSelectedItem(null)}>
-            {selectedItem ? (
-              <View style={{ width: "85%", height: "70%" }}>
-                <Image
-                  source={selectedItem.source}
-                  style={{ width: "100%", height: "100%", borderRadius: 16 }}
-                  resizeMode="contain"
-                />
+          <View className="flex-1">
+            <Pressable
+              accessibilityLabel="Close image"
+              onPress={() => setSelectedItem(null)}
+              className="absolute inset-0 bg-black/60"
+            />
+            <View className="absolute inset-0 items-center justify-center" pointerEvents="box-none">
+              {selectedItem ? (
+                <View
+                  className="overflow-hidden rounded-2xl bg-black"
+                  style={{ width: "85%", height: "70%" }}
+                >
+                  <View className="flex-1">
+                    <Image
+                      source={selectedItem.source}
+                      style={{ width: "100%", height: "100%" }}
+                      resizeMode="contain"
+                    />
+                    <Pressable
+                      accessibilityLabel="Close"
+                      onPress={() => setSelectedItem(null)}
+                      className="absolute left-2 top-2 h-8 w-8 items-center justify-center rounded-full bg-black/50 active:opacity-80"
+                    >
+                      <Text className="text-base font-bold leading-none text-white">×</Text>
+                    </Pressable>
+                    <Pressable
+                      accessibilityLabel="Delete photo"
+                      disabled={isDeleting}
+                      onPress={() =>
+                        Alert.alert("Delete photo", "This will permanently delete this photo.", [
+                          { text: "Cancel", style: "cancel" },
+                          { text: "Delete", style: "destructive", onPress: () => void handleDeletePhoto() },
+                        ])
+                      }
+                      className="absolute right-2 top-2 h-8 w-8 items-center justify-center rounded-full bg-black/50 active:opacity-80 disabled:opacity-40"
+                    >
+                      <Ionicons name="trash-outline" size={18} color="#fff" />
+                    </Pressable>
+                  </View>
+                </View>
+              ) : null}
+            </View>
+          </View>
+        </Modal>
+
+        <Modal
+          visible={accountMenuOpen}
+          transparent
+          animationType="fade"
+          onRequestClose={() => setAccountMenuOpen(false)}
+        >
+          <View className="flex-1 justify-end">
+            <Pressable
+              className="absolute inset-0 bg-black/40"
+              onPress={() => setAccountMenuOpen(false)}
+              accessibilityLabel="Close menu"
+            />
+            <View
+              className="rounded-t-3xl border-t border-[#E6E1DA] bg-white"
+              style={{ paddingBottom: 12 + insets.bottom }}
+            >
+              <Text className="px-5 pb-2 pt-3 text-center text-sm font-semibold text-[#0B0B0B]">Account</Text>
+              <View className="border-t border-[#E6E1DA]">
                 <Pressable
-                  onPress={() =>
-                    Alert.alert("Delete photo", "This will permanently delete this photo.", [
-                      { text: "Cancel", style: "cancel" },
-                      { text: "Delete", style: "destructive", onPress: () => void handleDeletePhoto() },
-                    ])
-                  }
-                  disabled={isDeleting}
-                  style={{
-                    position: "absolute",
-                    top: -14,
-                    right: -14,
-                    width: 30,
-                    height: 30,
-                    borderRadius: 15,
-                    backgroundColor: "rgba(0,0,0,0.75)",
-                    alignItems: "center",
-                    justifyContent: "center",
+                  className="items-center py-3.5 active:bg-[#F4F0EA]"
+                  onPress={() => {
+                    setAccountMenuOpen(false);
+                    void supabase.auth.signOut();
                   }}
                 >
-                  <Text style={{ color: "white", fontSize: 14, fontWeight: "bold", lineHeight: 18 }}>✕</Text>
+                  <Text className="text-base font-semibold text-red-500">Sign out</Text>
                 </Pressable>
               </View>
-            ) : null}
-          </Pressable>
+            </View>
+          </View>
         </Modal>
 
         <Modal
@@ -616,7 +823,7 @@ export default function ArchiveTab() {
                 />
               ) : null}
               <Text className="mb-2 text-base font-black text-black">Add a caption</Text>
-              <View className="mb-4 rounded-2xl border border-gray-200 px-4 py-3">
+              <View className="mb-4 rounded-2xl border border-gray-200 px-4 pb-3 pt-2">
                 <TextInput
                   value={captionDraft}
                   onChangeText={setCaptionDraft}
@@ -626,6 +833,15 @@ export default function ArchiveTab() {
                   multiline
                   numberOfLines={3}
                   autoFocus
+                  textAlignVertical="top"
+                  style={{
+                    minHeight: 80,
+                    paddingTop: 0,
+                    paddingBottom: 0,
+                    lineHeight: 22,
+                    fontSize: 16,
+                    color: "#0B0B0B",
+                  }}
                 />
               </View>
               <View className="flex-row gap-3">

@@ -87,8 +87,15 @@ export async function placeholder_extractSearchableTextFromImage(
   ctx: VisionExtractContext,
 ): Promise<string> {
   if (!PLACEHOLDER_FLAGS.useVisionTextExtraction) return "";
-  const apiKey = process.env.EXPO_PUBLIC_ANTHROPIC_API_KEY;
-  if (!apiKey) throw new Error("EXPO_PUBLIC_ANTHROPIC_API_KEY is not set");
+  const apiKey = process.env.EXPO_PUBLIC_ANTHROPIC_API_KEY?.trim();
+  if (!apiKey) {
+    if (__DEV__) {
+      console.warn(
+        "[Vision] EXPO_PUBLIC_ANTHROPIC_API_KEY is not set; upload continues without a generated description. Add the key to .env to enable Claude Haiku image tagging (see .env.example)."
+      );
+    }
+    return "";
+  }
 
   // Resize to max 1568px and compress to stay under Anthropic's 5MB image limit
   const resized = await ImageManipulator.manipulateAsync(
