@@ -15,6 +15,7 @@ import {
   placeholder_fetchRemoteArchiveMeta,
   placeholder_notifyArchiveIndexUpdated,
 } from "@/lib/teamIntegrationPlaceholders";
+import { posthog } from "@/lib/posthog";
 import { supabase } from "@/lib/supabase";
 import { useFocusEffect } from "@react-navigation/native";
 import { decode } from "base64-arraybuffer";
@@ -379,6 +380,7 @@ export default function ArchiveTab() {
         return fail("Upload succeeded but could not save OCR description.");
       }
       setSupplementalSearchById(await upsertSupplementalSearchText(newId, visionText));
+      posthog.capture("photo_uploaded");
       void loadItems();
     } catch {
       fail("Could not upload this file.");

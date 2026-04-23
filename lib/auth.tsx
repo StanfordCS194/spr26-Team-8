@@ -1,3 +1,4 @@
+import { posthog } from "@/lib/posthog";
 import { supabase } from "@/lib/supabase";
 import type { Session } from "@supabase/supabase-js";
 import { createContext, useContext, useEffect, useMemo, useState } from "react";
@@ -28,6 +29,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const { data: listener } = supabase.auth.onAuthStateChange((_event, nextSession) => {
       setSession(nextSession);
       setIsLoading(false);
+      if (nextSession?.user) {
+        posthog.identify(nextSession.user.id, { email: nextSession.user.email });
+      } else {
+        posthog.reset();
+      }
     });
 
     return () => {

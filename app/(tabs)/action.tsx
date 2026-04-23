@@ -1,4 +1,5 @@
 import { PLACEHOLDER_CHAT_PROMPTS } from "@/lib/chatPromptPlaceholders";
+import { posthog } from "@/lib/posthog";
 import { placeholder_sendChatMessage } from "@/lib/teamIntegrationPlaceholders";
 import { Ionicons } from "@expo/vector-icons";
 import { useCallback, useRef, useState } from "react";
@@ -27,6 +28,8 @@ export default function ActionTab() {
   const [sending, setSending] = useState(false);
   const [showQuickActions, setShowQuickActions] = useState(true);
   const scrollRef = useRef<ScrollView>(null);
+  // stable session ID for grouping messages in PostHog
+  const chatSessionId = useRef(`chat-${Date.now()}`).current;
 
   const appendExchange = useCallback(async (userText: string) => {
     const trimmed = userText.trim();
@@ -34,6 +37,7 @@ export default function ActionTab() {
     setShowQuickActions(false);
     setSending(true);
     setMessages((m) => [...m, { role: "user", text: trimmed }]);
+    posthog.capture("chat_message_sent", { chat_session_id: chatSessionId });
     try {
       const reply = await placeholder_sendChatMessage(trimmed);
       setMessages((m) => [...m, { role: "assistant", text: reply }]);
