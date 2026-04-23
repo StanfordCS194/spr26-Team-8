@@ -21,7 +21,7 @@ export default function ActionTab() {
   const [messages, setMessages] = useState<ChatMessage[]>([
     {
       role: "assistant",
-      text: "Placeholder chat — connect `placeholder_sendChatMessage` to your API in lib/teamIntegrationPlaceholders.ts.",
+      text: "I can help plan from your uploaded memories. Try one of the quick actions below.",
     },
   ]);
   const [sending, setSending] = useState(false);
@@ -35,12 +35,15 @@ export default function ActionTab() {
     try {
       const reply = await placeholder_sendChatMessage(trimmed);
       setMessages((m) => [...m, { role: "assistant", text: reply }]);
-    } catch {
+    } catch (err) {
       setMessages((m) => [
         ...m,
         {
           role: "assistant",
-          text: "[Placeholder] Chat request failed — add error handling when you integrate the real API.",
+          text:
+            err instanceof Error
+              ? `Sorry, I could not generate a response: ${err.message}`
+              : "Sorry, I could not generate a response right now.",
         },
       ]);
     } finally {
@@ -62,7 +65,7 @@ export default function ActionTab() {
           <Text className="px-5 pt-2 text-sm font-medium text-[#5F5F5F]">Assistant</Text>
           <Text className="px-5 pt-1 text-4xl font-bold tracking-[-0.5px] text-[#0B0B0B]">Action</Text>
           <Text className="px-5 pb-2 pt-1 text-xs font-medium uppercase tracking-[0.2em] text-[#6B6B6B]">
-            Placeholder
+            Memory-aware assistant
           </Text>
 
           <ScrollView
