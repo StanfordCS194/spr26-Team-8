@@ -9,6 +9,7 @@ import {
   searchAndRankArchiveRows,
 } from "@/lib/archiveSearchAndCluster";
 import { loadSupplementalSearchText, removeSupplementalSearchText, upsertSupplementalSearchText } from "@/lib/archiveSupplementalSearchText";
+import { checkImageContext, moderateUpload } from "@/lib/moderation";
 import {
   placeholder_extractSearchableTextFromImage,
   placeholder_fetchEmbeddingThemeOverrides,
@@ -305,6 +306,23 @@ export default function ArchiveTab() {
         encoding: FileSystem.EncodingType.Base64,
       });
       const arrayBuffer = decode(base64);
+
+      const moderation = await moderateUpload({
+        base64,
+        mimeType: contentType,
+        caption: caption.trim() || undefined,
+      });
+      if (!moderation.allowed) {
+        return fail(`This upload was blocked by content moderation (${moderation.reason}).`);
+      }
+
+      const context = await checkImageContext({
+        base64,
+        mimeType: contentType,
+      });
+      if (!context.ok) {
+        return fail(`This image doesn't look like a memory worth saving (${context.reason}). Try another photo.`);
+      }
 
       const { data: memoryRow } = await supabase
         .from("memories")
