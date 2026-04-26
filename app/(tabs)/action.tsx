@@ -3,6 +3,8 @@ import { posthog } from "@/lib/posthog";
 import { placeholder_sendChatMessage } from "@/lib/teamIntegrationPlaceholders";
 import { Ionicons } from "@expo/vector-icons";
 import { useCallback, useRef, useState } from "react";
+import { Image } from "expo-image";
+import * as ImagePicker from "expo-image-picker";
 import {
   ActivityIndicator,
   KeyboardAvoidingView,
@@ -16,20 +18,67 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 
 type ChatMessage = { role: "user" | "assistant"; text: string };
+type SelectedImage = {
+  uri: string;
+  width?: number;
+  height?: number;
+  fileName?: string | null;
+};
 
 export default function ActionTab() {
   const [input, setInput] = useState("");
-  const [messages, setMessages] = useState<ChatMessage[]>([
-    {
-      role: "assistant",
-      text: "I can help plan from your uploaded memories. Try one of the quick actions below.",
-    },
-  ]);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [selectedImages, setSelectedImages] = useState<SelectedImage[]>([]);
   const [sending, setSending] = useState(false);
   const [showQuickActions, setShowQuickActions] = useState(true);
   const scrollRef = useRef<ScrollView>(null);
   // stable session ID for grouping messages in PostHog
   const chatSessionId = useRef(`chat-${Date.now()}`).current;
+
+  const pickImages = useCallback(async () => {
+    if (sending) return;
+
+    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!permission.granted) {
+      setMessages((m) => [
+        ...m,
+        {
+          role: "assistant",
+          text: "Please allow photo library access to attach images.",
+        },
+      ]);
+      return;
+    }
+
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      allowsMultipleSelection: true,
+      selectionLimit: 10,
+      quality: 1,
+    });
+
+    if (result.canceled) return;
+
+    setSelectedImages((prev) => {
+      const next = [
+        ...prev,
+        ...result.assets.map((a) => ({
+          uri: a.uri,
+          width: a.width,
+          height: a.height,
+          fileName: a.fileName ?? null,
+        })),
+      ];
+
+      // de-dupe by uri while preserving order
+      const seen = new Set<string>();
+      return next.filter((img) => {
+        if (seen.has(img.uri)) return false;
+        seen.add(img.uri);
+        return true;
+      });
+    });
+  }, [sending]);
 
   const appendExchange = useCallback(async (userText: string) => {
     const trimmed = userText.trim();
@@ -110,15 +159,20 @@ export default function ActionTab() {
 
           {showQuickActions ? (
             <View className="border-t border-[#EFE8DF] bg-[#F4F0EA] px-4 pb-2 pt-3">
-              <View className="gap-3">
+              <View className="flex-row flex-wrap gap-3">
                 {PLACEHOLDER_CHAT_PROMPTS.map((label) => (
                   <Pressable
                     key={label}
                     onPress={() => void appendExchange(label)}
                     disabled={sending}
-                    className="min-h-[150px] w-full justify-start rounded-[36px] border border-[#D9D2C7] bg-white px-5 py-4 shadow-sm active:opacity-70"
+                    className="min-h-[92px] w-[48%] justify-center overflow-hidden rounded-[26px] border border-[#D9D2C7] bg-[#FFFCF8] px-4 py-4 shadow-sm active:opacity-70"
                   >
-                    <Text className="text-xl font-semibold leading-7 text-[#0B0B0B]">{label}</Text>
+                    <Text
+                      className="text-[15px] font-semibold leading-5 tracking-[-0.1px] text-[#0B0B0B]"
+                      numberOfLines={4}
+                    >
+                      {label}
+                    </Text>
                   </Pressable>
                 ))}
               </View>
@@ -127,9 +181,40 @@ export default function ActionTab() {
         </SafeAreaView>
 
         <View className="bg-[#F4F0EA] px-3 pb-4 pt-2">
+          {selectedImages.length ? (
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              className="mb-2"
+              contentContainerClassName="gap-2 px-1"
+            >
+              {selectedImages.map((img) => (
+                <View key={img.uri} className="relative">
+                  <Image
+                    source={{ uri: img.uri }}
+                    contentFit="cover"
+                    className="h-16 w-16 rounded-2xl border border-[#E6E1DA] bg-white"
+                  />
+                  <Pressable
+                    accessibilityRole="button"
+                    onPress={() =>
+                      setSelectedImages((prev) => prev.filter((p) => p.uri !== img.uri))
+                    }
+                    hitSlop={10}
+                    className="absolute -right-1 -top-1 h-6 w-6 items-center justify-center rounded-full bg-[#0B0B0B] active:opacity-80"
+                  >
+                    <Ionicons name="close" size={14} color="#FFFFFF" />
+                  </Pressable>
+                </View>
+              ))}
+            </ScrollView>
+          ) : null}
+
           <View className="flex-row items-center gap-2">
             <Pressable
               accessibilityRole="button"
+              onPress={() => void pickImages()}
+              disabled={sending}
               className="h-9 w-9 items-center justify-center rounded-full border border-[#E6E1DA] bg-white active:opacity-70"
             >
               <Ionicons name="add" size={24} color="#0B0B0B" />
