@@ -129,21 +129,22 @@ export default function ArchiveTab() {
   useEffect(() => {
     if (!resolvedSharedPayloads.length) return;
 
-    const sharedImagePayloads = resolvedSharedPayloads.filter(
-      (payload) => payload.contentType === "image" && payload.contentUri
+    const sharedImageUris = resolvedSharedPayloads
+      .filter((payload) => payload.contentType === "image")
+      .map((payload) => payload.contentUri)
+      .filter((uri): uri is string => Boolean(uri));
+
+    if (!sharedImageUris.length) return;
+
+    const unhandledUri = sharedImageUris.find(
+      (uri) => !handledSharedUrisRef.current.has(uri)
     );
+    if (!unhandledUri) return;
 
-    if (!sharedImagePayloads.length) return;
-
-    const unhandledPayload = sharedImagePayloads.find(
-      (payload) => !handledSharedUrisRef.current.has(payload.contentUri)
-    );
-    if (!unhandledPayload) return;
-
-    handledSharedUrisRef.current.add(unhandledPayload.contentUri);
+    handledSharedUrisRef.current.add(unhandledUri);
     setPendingAsset({
-      uri: unhandledPayload.contentUri,
-      fileName: unhandledPayload.contentUri.split("/").pop() ?? `shared-${Date.now()}.jpg`,
+      uri: unhandledUri,
+      fileName: unhandledUri.split("/").pop() ?? `shared-${Date.now()}.jpg`,
     } as ImagePicker.ImagePickerAsset);
     setCaptionDraft("");
     clearSharedPayloads();
