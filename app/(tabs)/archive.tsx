@@ -21,6 +21,7 @@ import { Ionicons } from "@expo/vector-icons";
 import * as FileSystem from "expo-file-system/legacy";
 import * as ImageManipulator from "expo-image-manipulator";
 import * as ImagePicker from "expo-image-picker";
+import { useIncomingShare } from "expo-sharing";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert,
@@ -112,10 +113,41 @@ export default function ArchiveTab() {
   const settingsButtonRef = useRef<View | null>(null);
   const insets = useSafeAreaInsets();
   const ACCOUNT_MENU_W = 208;
+  const handledSharedUrisRef = useRef<Set<string>>(new Set());
+  const { resolvedSharedPayloads, clearSharedPayloads, error: shareError } = useIncomingShare();
 
   useEffect(() => {
     void loadSupplementalSearchText().then(setSupplementalSearchById);
   }, []);
+
+  useEffect(() => {
+    if (shareError) {
+      Alert.alert("Share", "Could not read incoming shared content.");
+    }
+  }, [shareError]);
+
+  useEffect(() => {
+    if (!resolvedSharedPayloads.length) return;
+
+    const sharedImagePayloads = resolvedSharedPayloads.filter(
+      (payload) => payload.contentType === "image" && payload.contentUri
+    );
+
+    if (!sharedImagePayloads.length) return;
+
+    const unhandledPayload = sharedImagePayloads.find(
+      (payload) => !handledSharedUrisRef.current.has(payload.contentUri)
+    );
+    if (!unhandledPayload) return;
+
+    handledSharedUrisRef.current.add(unhandledPayload.contentUri);
+    setPendingAsset({
+      uri: unhandledPayload.contentUri,
+      fileName: unhandledPayload.contentUri.split("/").pop() ?? `shared-${Date.now()}.jpg`,
+    } as ImagePicker.ImagePickerAsset);
+    setCaptionDraft("");
+    clearSharedPayloads();
+  }, [clearSharedPayloads, resolvedSharedPayloads]);
 
   const loadItems = useCallback(async () => {
     const { data: { user } } = await supabase.auth.getUser();
