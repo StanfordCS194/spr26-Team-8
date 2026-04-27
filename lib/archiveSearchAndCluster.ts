@@ -5,6 +5,9 @@ export type ArchiveItemMeta = {
   tags: string[];
 };
 
+/** Id + filename pair used by every archive enrichment / sync function. */
+export type ArchiveIdRef = { id: string; fileName: string };
+
 export type EnrichedArchiveItem = {
   id: string;
   fileName: string;
