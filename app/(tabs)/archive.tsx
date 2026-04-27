@@ -10,12 +10,9 @@ import {
 } from "@/lib/archiveSearchAndCluster";
 import { loadSupplementalSearchText, removeSupplementalSearchText, upsertSupplementalSearchText } from "@/lib/archiveSupplementalSearchText";
 import { checkImageContext, moderateUpload } from "@/lib/moderation";
-import {
-  placeholder_extractSearchableTextFromImage,
-  placeholder_fetchEmbeddingThemeOverrides,
-  placeholder_fetchRemoteArchiveMeta,
-  placeholder_notifyArchiveIndexUpdated,
-} from "@/lib/teamIntegrationPlaceholders";
+import { fetchRemoteArchiveMeta, notifyArchiveIndexUpdated } from "@/lib/archiveBackendSync";
+import { fetchEmbeddingThemeOverrides } from "@/lib/embeddingThemes";
+import { extractSearchableTextFromImage } from "@/lib/vision";
 import { posthog } from "@/lib/posthog";
 import { supabase } from "@/lib/supabase";
 import { useFocusEffect } from "@react-navigation/native";
@@ -189,11 +186,11 @@ export default function ArchiveTab() {
     let cancelled = false;
     void (async () => {
       const local = await hydrateArchiveMeta(ids);
-      const remote = await placeholder_fetchRemoteArchiveMeta(ids);
+      const remote = await fetchRemoteArchiveMeta(ids);
       const merged = mergeArchiveMeta(local, remote);
       if (!cancelled) setMeta(merged);
 
-      const embeddingThemes = await placeholder_fetchEmbeddingThemeOverrides(ids);
+      const embeddingThemes = await fetchEmbeddingThemeOverrides(ids);
       if (!cancelled) setThemeOverrides(embeddingThemes);
     })();
 
@@ -214,7 +211,7 @@ export default function ArchiveTab() {
   const indexPayload = useMemo(() => archiveIndexForBackend(indexRows), [indexRows]);
 
   useEffect(() => {
-    void placeholder_notifyArchiveIndexUpdated(indexPayload);
+    void notifyArchiveIndexUpdated(indexPayload);
   }, [indexPayload]);
 
   const searchResults = useMemo(
@@ -380,7 +377,7 @@ export default function ArchiveTab() {
 
       let visionText: string;
       try {
-        visionText = await placeholder_extractSearchableTextFromImage(asset.uri, {
+        visionText = await extractSearchableTextFromImage(asset.uri, {
           id: newId,
           fileName,
           mimeType: contentType,

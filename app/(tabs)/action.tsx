@@ -1,6 +1,5 @@
-import { PLACEHOLDER_CHAT_PROMPTS } from "@/lib/chatPromptPlaceholders";
+import { CHAT_PROMPTS, sendChatMessage } from "@/lib/chat";
 import { posthog } from "@/lib/posthog";
-import { placeholder_sendChatMessage } from "@/lib/teamIntegrationPlaceholders";
 import { Ionicons } from "@expo/vector-icons";
 import { useCallback, useRef, useState } from "react";
 import { Image } from "expo-image";
@@ -88,7 +87,7 @@ export default function ActionTab() {
     setMessages((m) => [...m, { role: "user", text: trimmed }]);
     posthog.capture("chat_message_sent", { chat_session_id: chatSessionId });
     try {
-      const reply = await placeholder_sendChatMessage(trimmed);
+      const reply = await sendChatMessage(trimmed);
       setMessages((m) => [...m, { role: "assistant", text: reply }]);
     } catch (err) {
       setMessages((m) => [
@@ -160,7 +159,7 @@ export default function ActionTab() {
           {showQuickActions ? (
             <View className="border-t border-[#EFE8DF] bg-[#F4F0EA] px-4 pb-2 pt-3">
               <View className="flex-row flex-wrap gap-3">
-                {PLACEHOLDER_CHAT_PROMPTS.map((label) => (
+                {CHAT_PROMPTS.map((label) => (
                   <Pressable
                     key={label}
                     onPress={() => void appendExchange(label)}
