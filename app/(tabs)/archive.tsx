@@ -56,6 +56,8 @@ type GridCell = {
 
 type MemoryFileRow = {
   memory_id: string;
+  user_caption: string | null;
+  ocr_description: string | null;
   files: { storage_path: string } | { storage_path: string }[] | null;
 };
 
@@ -92,6 +94,7 @@ export default function ArchiveTab() {
   const [searchQuery, setSearchQuery] = useState("");
   const [themeFilter, setThemeFilter] = useState<"all" | string>("all");
   const [supplementalSearchById, setSupplementalSearchById] = useState<Record<string, string>>({});
+  const [serverSearchTextById, setServerSearchTextById] = useState<Record<string, string>>({});
   const [selectedItem, setSelectedItem] = useState<BoardItem | null>(null);
   const [pendingAsset, setPendingAsset] = useState<ImagePicker.ImagePickerAsset | null>(null);
   const [captionDraft, setCaptionDraft] = useState("");
@@ -119,16 +122,27 @@ export default function ArchiveTab() {
 
   const loadItems = useCallback(async () => {
     const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return setItems([]);
+    if (!user) {
+      setServerSearchTextById({});
+      return setItems([]);
+    }
 
     const { data } = await supabase
       .from("memories")
-      .select("memory_id, files(storage_path)")
+      .select("memory_id, user_caption, ocr_description, files(storage_path)")
       .eq("user_id", user.id)
       .not("file_id", "is", null)
       .order("memory_id", { ascending: true });
 
-    const entries = ((data as MemoryFileRow[] | null) ?? []).flatMap((m) => {
+    const rows = (data as MemoryFileRow[] | null) ?? [];
+    const serverText: Record<string, string> = {};
+    for (const m of rows) {
+      const text = [m.user_caption, m.ocr_description].filter(Boolean).join(" ").trim();
+      if (text) serverText[`uploaded-${m.memory_id}`] = text;
+    }
+    setServerSearchTextById(serverText);
+
+    const entries = rows.flatMap((m) => {
       const file = Array.isArray(m.files) ? m.files[0] : m.files;
       return file ? [{ memory_id: m.memory_id, storage_path: file.storage_path }] : [];
     });
@@ -199,14 +213,16 @@ export default function ArchiveTab() {
     };
   }, [items]);
 
-  const indexRows = useMemo(
-    () =>
-      enrichArchiveRows(items.map((b) => b.id), meta, {
-        themeOverrides,
-        searchableTextById: supplementalSearchById,
-      }),
-    [items, meta, themeOverrides, supplementalSearchById]
-  );
+  const indexRows = useMemo(() => {
+    const combined: Record<string, string> = { ...serverSearchTextById };
+    for (const [id, text] of Object.entries(supplementalSearchById)) {
+      combined[id] = combined[id] ? `${combined[id]} ${text}` : text;
+    }
+    return enrichArchiveRows(items.map((b) => b.id), meta, {
+      themeOverrides,
+      searchableTextById: combined,
+    });
+  }, [items, meta, themeOverrides, supplementalSearchById, serverSearchTextById]);
 
   const indexPayload = useMemo(() => archiveIndexForBackend(indexRows), [indexRows]);
 
