@@ -6,7 +6,12 @@ import {
 } from "@/lib/nudgePrefs";
 import { supabase } from "@/lib/supabase";
 import { utcWeekAnchorMonday } from "@/lib/weekAnchor";
-import { fetchWeeklyRecap, generateWeeklyRecap, type WeeklyRecapRow } from "@/lib/weeklyRecap";
+import {
+  fetchWeeklyRecap,
+  generateWeeklyRecap,
+  WEEKLY_RECAP_LINE_COUNT,
+  type WeeklyRecapRow,
+} from "@/lib/weeklyRecap";
 import { Ionicons } from "@expo/vector-icons";
 import { useFocusEffect } from "@react-navigation/native";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -19,7 +24,7 @@ import {
   View,
 } from "react-native";
 
-/** Split model output into clean lines for list UI. */
+/** Split model output into clean lines for list UI (legacy rows may exceed three). */
 function parseBulletLines(raw: string): string[] {
   return raw
     .split(/\n/)
@@ -31,6 +36,9 @@ function parseBulletLines(raw: string): string[] {
     )
     .filter((line) => line.length > 0);
 }
+
+/** Light visual flair per row — keeps copy readable; pairs with punchy model prompts. */
+const LINE_FLAIR = ["✨", "🎯", "☕"] as const;
 
 /**
  * Weekly intent recap for the Action tab — polished card above the chat thread.
@@ -115,8 +123,11 @@ export function WeeklyRecapCard() {
     [recap]
   );
 
-  const visibleLines = expanded ? bulletLines : bulletLines.slice(0, 4);
-  const hasHiddenLines = bulletLines.length > 4;
+  const displayLines = useMemo(
+    () => bulletLines.slice(0, WEEKLY_RECAP_LINE_COUNT),
+    [bulletLines]
+  );
+
   const longTextFallback = Boolean(recap && bulletLines.length === 0 && recap.bullets.trim());
 
   if (loading || !userId || !prefsOn) return null;
@@ -154,7 +165,7 @@ export function WeeklyRecapCard() {
             <View className="min-w-0 flex-1">
               <Text className="text-lg font-bold tracking-[-0.3px] text-[#0B0B0B]">Your week</Text>
               <Text className="mt-0.5 text-sm leading-5 text-[#6B6B6B]">
-                A gentle nudge from what you’ve saved and chatted about
+                Three quick nudges from what you’ve saved & chatted about
               </Text>
             </View>
           </View>
@@ -243,37 +254,23 @@ export function WeeklyRecapCard() {
           </View>
         ) : (
           <View>
-            <View className="gap-0.5">
-              {visibleLines.map((line, i) => (
+            <View className="gap-2.5">
+              {displayLines.map((line, i) => (
                 <View
                   key={`${i}-${line.slice(0, 24)}`}
-                  className="flex-row gap-3 border-b border-[#F4F0EA] py-2.5 last:border-b-0"
+                  className="flex-row items-start gap-3 rounded-2xl border border-[#EFE8DF] bg-[#FAF8F5] px-3.5 py-3"
                 >
-                  <View className="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-[#0B7AEE]" />
-                  <Text className="min-w-0 flex-1 text-[15px] leading-[22px] text-[#2C2C2C]">
+                  <Text className="pt-0.5 text-lg leading-none">
+                    {LINE_FLAIR[i % LINE_FLAIR.length]}
+                  </Text>
+                  <Text className="min-w-0 flex-1 text-[15px] font-medium leading-[22px] text-[#1A1A1A]">
                     {line}
                   </Text>
                 </View>
               ))}
             </View>
 
-            {hasHiddenLines ? (
-              <Pressable
-                onPress={() => setExpanded(!expanded)}
-                className="mt-2 flex-row items-center justify-center gap-1 self-center py-2"
-              >
-                <Text className="text-sm font-semibold text-[#0B7AEE]">
-                  {expanded ? "Show less" : `Show ${bulletLines.length - 4} more`}
-                </Text>
-                <Ionicons
-                  name={expanded ? "chevron-up" : "chevron-down"}
-                  size={16}
-                  color="#0B7AEE"
-                />
-              </Pressable>
-            ) : null}
-
-            <View className="mt-3 flex-row items-center justify-end border-t border-[#F0EBE2] pt-3">
+            <View className="mt-4 flex-row items-center justify-end border-t border-[#F0EBE2] pt-3">
               <Pressable
                 disabled={generating}
                 onPress={() => void tryGenerate()}

@@ -9,6 +9,28 @@ export type WeeklyRecapRow = {
   created_at: string;
 };
 
+/** Stored recaps are always at most this many lines (UI + model aligned). */
+export const WEEKLY_RECAP_LINE_COUNT = 3;
+
+/**
+ * Trim model output to at most `maxLines` bullets, normalized to `- line\\n` form.
+ */
+export function normalizeRecapBullets(raw: string, maxLines = WEEKLY_RECAP_LINE_COUNT): string {
+  const lines = raw
+    .split(/\n/)
+    .map((line) =>
+      line
+        .replace(/^\s*[-*•]\s*/, "")
+        .replace(/^\s*\d+[.)]\s*/, "")
+        .trim()
+    )
+    .filter((line) => line.length > 0)
+    .slice(0, maxLines);
+
+  if (lines.length === 0) return "";
+  return lines.map((b) => `- ${b}`).join("\n");
+}
+
 function daysAgoUtcIso(days: number): string {
   const d = new Date();
   d.setUTCDate(d.getUTCDate() - days);
@@ -112,10 +134,12 @@ export async function generateWeeklyRecap(): Promise<{ bullets: string; week_anc
       .join("\n") || "(no saved memory text yet)";
 
   const systemPrompt =
-    "You distill explicit plans and intents from the user's uploads and chats.\n" +
-    "Output 4–7 short bullet lines ONLY. Start each line with '- '. No title, no numbering without '- '.\n" +
-    "Each bullet should remind the user of something they said they WANT to DO, TRY, BOOK, BUY, SCHEDULE, or REVISIT.\n" +
-    "Prefer concrete wording. Omit generic filler. If evidence is thin, produce a few honest best-effort bullets and add one bullet: '- Add a short “I want to…” when you upload so we can remind you.'";
+    "You write bite-sized weekly nudges for a mobile app called Venn.\n" +
+    `Output EXACTLY ${WEEKLY_RECAP_LINE_COUNT} lines — no more, no less. Each line MUST start with '- '.\n` +
+    "Tone: warm, concise, lightly playful (one tiny spark of personality — not cheesy, not corporate).\n" +
+    "Each line is ONE tight reminder (max ~14 words) of something they implied they want to do, try, book, buy, or revisit — from uploads or chat.\n" +
+    "Use vivid verbs and plain language. No ‘Dear user’, no lecture. No duplicate ideas.\n" +
+    "If context is thin, still output 3 lines: short honest guesses from what exists, and keep one line gently nudging them to add “I want to…” on Library uploads next time.";
 
   const userPayload =
     `--- Recent uploads / intents (captions & “want to”) ---\n${uploadsBlock}\n\n` +
@@ -129,7 +153,7 @@ export async function generateWeeklyRecap(): Promise<{ bullets: string; week_anc
     },
     body: JSON.stringify({
       model: "gpt-4.1-mini",
-      temperature: 0.4,
+      temperature: 0.55,
       messages: [
         { role: "system", content: systemPrompt },
         { role: "user", content: userPayload },
@@ -149,8 +173,11 @@ export async function generateWeeklyRecap(): Promise<{ bullets: string; week_anc
   const json = (await response.json()) as {
     choices?: { message?: { content?: string } }[];
   };
-  const bullets = json.choices?.[0]?.message?.content?.trim() ?? "";
-  if (!bullets) throw new Error("Empty recap from OpenAI.");
+  const rawBullets = json.choices?.[0]?.message?.content?.trim() ?? "";
+  if (!rawBullets) throw new Error("Empty recap from OpenAI.");
+
+  const bullets = normalizeRecapBullets(rawBullets);
+  if (!bullets) throw new Error("Could not parse recap lines.");
 
   const { error: upsertError } = await supabase.from("weekly_recaps").upsert(
     { user_id: userId, week_anchor: weekAnchor, bullets },
