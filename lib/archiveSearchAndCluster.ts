@@ -350,6 +350,12 @@ export type EnrichArchiveOptions = {
   /** When embeddings / backend supply a cluster label, it wins over keyword `inferTheme`. */
   themeOverrides?: Record<string, string>;
   /**
+   * Real display/storage file names keyed by archive id (e.g. from Supabase `files.file_name`).
+   * Upload ids look like `uploaded-<memory_id>`; without this, search falls back to indexing the raw
+   * UUID, which makes keyword search feel broken.
+   */
+  fileNameById?: Record<string, string>;
+  /**
    * Extra searchable text per item (captions, transcripts, OCR, notes) — folded into `searchBlob` only.
    * When you have thousands of multimodal items, populate from backend sync; ranking stays client-side until indexed.
    */
@@ -362,7 +368,8 @@ export function enrichArchiveRows(
   options?: EnrichArchiveOptions
 ): EnrichedArchiveItem[] {
   return ids.map((id) => {
-    const fileName = fileNameFromArchiveId(id);
+    const fromMap = options?.fileNameById?.[id]?.trim();
+    const fileName = fromMap && fromMap.length > 0 ? fromMap : fileNameFromArchiveId(id);
     const tags =
       meta[id]?.tags && meta[id].tags.length > 0 ? meta[id].tags : inferTagsFromFileName(fileName);
     const theme =
