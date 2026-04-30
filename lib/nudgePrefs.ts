@@ -5,7 +5,7 @@ const DISMISS_PREFIX = "venn:weekly_nudge_dismissed:";
 
 const prefsListeners = new Set<() => void>();
 
-/** Notify listeners after preference changes (e.g. WeeklyNudgeBanner). */
+/** Notify listeners after preference changes (e.g. WeeklyRecapCard on Action tab). */
 export function subscribeNudgePreferenceChanges(listener: () => void): () => void {
   prefsListeners.add(listener);
   return () => prefsListeners.delete(listener);

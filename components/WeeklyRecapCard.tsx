@@ -18,11 +18,10 @@ import {
 } from "react-native";
 
 /**
- * Lightweight weekly “nudge”: shows condensed recap bullets for this UTC week.
- * Applies after you run the SQL migration (`supabase/migrations/...weekly_nudge...sql`).
+ * Weekly intent recap for the Action tab (uploads + Action chat), shown above the message list.
  */
 
-export function WeeklyNudgeBanner() {
+export function WeeklyRecapCard() {
   const [userId, setUserId] = useState<string | null>(null);
   const [weekAnchor] = useState(() => utcWeekAnchorMonday());
   const [prefsOn, setPrefsOn] = useState(true);
@@ -84,14 +83,13 @@ export function WeeklyNudgeBanner() {
         setDismissedAnchor(null);
       }
     } catch (e) {
-      const raw = e instanceof Error ? e.message : "Could not generate recap.";
-      setErrorHint(raw);
+      setErrorHint(e instanceof Error ? e.message : "Could not generate recap.");
     } finally {
       setGenerating(false);
     }
   }, [userId]);
 
-  const onDismissBanner = useCallback(async () => {
+  const onDismiss = useCallback(async () => {
     if (!userId) return;
     await dismissWeekAnchor(userId, weekAnchor);
     setDismissedAnchor(weekAnchor);
@@ -109,14 +107,13 @@ export function WeeklyNudgeBanner() {
 
   return (
     <View
-      className="border-b border-[#E6E1DA] bg-[#FFF9F0]"
-      style={{ paddingHorizontal: 16, paddingTop: 8, paddingBottom: 12 }}
+      className="mb-4 overflow-hidden rounded-[22px] border border-[#E6E1DA] bg-[#FFFCF8] px-4 py-3 shadow-sm"
     >
       <View className="flex-row items-center justify-between gap-2 pb-1">
         <Text className="flex-1 text-xs font-semibold uppercase tracking-[0.16em] text-[#6B6B6B]">
           This week
         </Text>
-        <Pressable onPress={() => void onDismissBanner()} hitSlop={8} accessibilityLabel="Dismiss nudge banner">
+        <Pressable onPress={() => void onDismiss()} hitSlop={8} accessibilityLabel="Dismiss weekly recap">
           <Text className="text-xs font-semibold text-[#5F5F5F]">Dismiss</Text>
         </Pressable>
       </View>
@@ -124,7 +121,7 @@ export function WeeklyNudgeBanner() {
       {!recap ? (
         <View className="gap-2 pt-1">
           <Text className="text-sm leading-5 text-[#3A3A3A]">
-            Build a recap from uploads — things you typed under “I want to…” plus Action chat.
+            Your priorities from Library (“I want to…”) and this chat, summarized as a short list.
           </Text>
           <Pressable
             onPress={() => void tryGenerate()}
@@ -182,7 +179,7 @@ export function WeeklyNudgeBanner() {
           className={`mt-2 text-xs leading-5 ${isSetupHint ? "text-[#7A5C3E]" : "text-red-600"}`}
         >
           {isSetupHint
-            ? "One-time setup: in Supabase → SQL Editor, run the file supabase/migrations/20260430120000_weekly_nudge_chat.sql (creates weekly recap + chat tables). Then tap Make my recap again."
+            ? "One-time setup: in Supabase → SQL Editor, run the file supabase/migrations/20260430120000_weekly_nudge_chat.sql. Then tap Make my recap again."
             : errorHint}
         </Text>
       ) : null}

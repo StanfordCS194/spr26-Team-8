@@ -1,3 +1,4 @@
+import { WeeklyRecapCard } from "@/components/WeeklyRecapCard";
 import { CHAT_PROMPTS, sendChatMessage } from "@/lib/chat";
 import { posthog } from "@/lib/posthog";
 import { Ionicons } from "@expo/vector-icons";
@@ -127,6 +128,7 @@ export default function ActionTab() {
               scrollRef.current?.scrollToEnd({ animated: true })
             }
           >
+            <WeeklyRecapCard />
             {messages.map((msg, i) => (
               <View
                 key={`${i}-${msg.role}`}

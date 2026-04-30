@@ -1,4 +1,3 @@
-import { WeeklyNudgeBanner } from "@/components/WeeklyNudgeBanner";
 import { useAuth } from "@/lib/auth";
 import { venn } from "@/lib/vennTheme";
 import { Redirect, Tabs } from "expo-router";
@@ -22,7 +21,6 @@ export default function TabsLayout() {
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: "#F4F0EA" }} edges={["top", "left", "right"]}>
-      <WeeklyNudgeBanner />
       <View style={{ flex: 1, minHeight: 0 }}>
         <Tabs
           screenOptions={{
