@@ -1,4 +1,5 @@
 import { supabase } from "@/lib/supabase";
+import { isMissingTableError, isUndefinedColumnError } from "@/lib/supabaseSchema";
 
 import { utcWeekAnchorMonday } from "@/lib/weekAnchor";
 
@@ -30,7 +31,9 @@ export async function fetchWeeklyRecap(
     .maybeSingle();
 
   if (error) {
-    if (__DEV__) console.warn("[weeklyRecap] fetch:", error.message);
+    if (__DEV__ && !isMissingTableError(error, "weekly_recaps")) {
+      console.warn("[weeklyRecap] fetch:", error.message);
+    }
     return null;
   }
   return data as WeeklyRecapRow | null;
@@ -52,21 +55,42 @@ export async function generateWeeklyRecap(): Promise<{ bullets: string; week_anc
   const weekAnchor = utcWeekAnchorMonday();
   const sinceIso = daysAgoUtcIso(14);
 
-  const [{ data: chatRows }, { data: memoryRows }] = await Promise.all([
-    supabase
-      .from("chat_messages")
-      .select("role, content, created_at")
-      .eq("user_id", userId)
-      .gte("created_at", sinceIso)
-      .order("created_at", { ascending: true })
-      .limit(120),
-    supabase
+  const chatQ = await supabase
+    .from("chat_messages")
+    .select("role, content, created_at")
+    .eq("user_id", userId)
+    .gte("created_at", sinceIso)
+    .order("created_at", { ascending: true })
+    .limit(120);
+
+  let chatRows = chatQ.data ?? [];
+  if (chatQ.error && isMissingTableError(chatQ.error, "chat_messages")) {
+    chatRows = [];
+  } else if (chatQ.error) {
+    throw new Error(`Could not load chat history: ${chatQ.error.message}`);
+  }
+
+  let memQ = await supabase
+    .from("memories")
+    .select("want_to_do, user_caption, ocr_description, memory_id")
+    .eq("user_id", userId)
+    .order("memory_id", { ascending: false })
+    .limit(80);
+
+  if (memQ.error && isUndefinedColumnError(memQ.error, "want_to_do")) {
+    memQ = await supabase
       .from("memories")
-      .select("want_to_do, user_caption, ocr_description, memory_id")
+      .select("user_caption, ocr_description, memory_id")
       .eq("user_id", userId)
       .order("memory_id", { ascending: false })
-      .limit(80),
-  ]);
+      .limit(80);
+  }
+
+  if (memQ.error) {
+    throw new Error(`Could not load memories: ${memQ.error.message}`);
+  }
+
+  const memoryRows = memQ.data ?? [];
 
   const chatBlock =
     (chatRows ?? [])
@@ -133,7 +157,14 @@ export async function generateWeeklyRecap(): Promise<{ bullets: string; week_anc
     { onConflict: "user_id,week_anchor" }
   );
 
-  if (upsertError) throw upsertError;
+  if (upsertError) {
+    if (isMissingTableError(upsertError, "weekly_recaps")) {
+      throw new Error(
+        "Weekly recap tables are missing. Run the SQL in supabase/migrations/*weekly*nudge*.sql in your Supabase project."
+      );
+    }
+    throw upsertError;
+  }
 
   return { bullets, week_anchor: weekAnchor };
 }

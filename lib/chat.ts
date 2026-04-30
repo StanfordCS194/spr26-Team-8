@@ -4,8 +4,8 @@
  */
 
 import { supabase } from "@/lib/supabase";
-
 import { logChatMessage } from "@/lib/chatLog";
+import { isUndefinedColumnError } from "@/lib/supabaseSchema";
 
 const USE_GENERATIVE_CHAT_API = true;
 
@@ -32,16 +32,27 @@ export async function sendChatMessage(userText: string): Promise<string> {
     throw new Error("You need to sign in before using chat.");
   }
 
-  const { data: memoryRows, error: memoryError } = await supabase
+  let memRes = await supabase
     .from("memories")
     .select("want_to_do, user_caption, ocr_description")
     .eq("user_id", userId)
     .order("memory_id", { ascending: false })
     .limit(80);
 
-  if (memoryError) {
-    throw new Error(`Could not load memory context: ${memoryError.message}`);
+  if (memRes.error && isUndefinedColumnError(memRes.error, "want_to_do")) {
+    memRes = await supabase
+      .from("memories")
+      .select("user_caption, ocr_description")
+      .eq("user_id", userId)
+      .order("memory_id", { ascending: false })
+      .limit(80);
   }
+
+  if (memRes.error) {
+    throw new Error(`Could not load memory context: ${memRes.error.message}`);
+  }
+
+  const memoryRows = memRes.data;
 
   const snippets = (memoryRows ?? []).map((row) => {
     const parts = [row.want_to_do, row.user_caption, row.ocr_description]

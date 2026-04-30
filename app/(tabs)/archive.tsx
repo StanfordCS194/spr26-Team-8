@@ -20,6 +20,7 @@ import { getWeeklyNudgeEnabled, setWeeklyNudgeEnabled } from "@/lib/nudgePrefs";
 import { extractSearchableTextFromImage } from "@/lib/vision";
 import { posthog } from "@/lib/posthog";
 import { supabase } from "@/lib/supabase";
+import { isUndefinedColumnError } from "@/lib/supabaseSchema";
 import { useFocusEffect } from "@react-navigation/native";
 import { decode } from "base64-arraybuffer";
 import { Ionicons } from "@expo/vector-icons";
@@ -66,7 +67,7 @@ type GridCell = {
 
 type MemoryFileRow = {
   memory_id: string;
-  want_to_do: string | null;
+  want_to_do?: string | null;
   ocr_description: string | null;
   user_caption: string | null;
   files:
@@ -144,14 +145,33 @@ export default function ArchiveTab() {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return setItems([]);
 
-    const { data } = await supabase
+    const SEL_FULL =
+      "memory_id, want_to_do, ocr_description, user_caption, files(storage_path, file_name)";
+    const SEL_LEGACY =
+      "memory_id, ocr_description, user_caption, files(storage_path, file_name)";
+
+    let rowsRes = await supabase
       .from("memories")
-      .select(
-        "memory_id, want_to_do, ocr_description, user_caption, files(storage_path, file_name)"
-      )
+      .select(SEL_FULL)
       .eq("user_id", user.id)
       .not("file_id", "is", null)
       .order("memory_id", { ascending: true });
+
+    if (rowsRes.error && isUndefinedColumnError(rowsRes.error, "want_to_do")) {
+      rowsRes = await supabase
+        .from("memories")
+        .select(SEL_LEGACY)
+        .eq("user_id", user.id)
+        .not("file_id", "is", null)
+        .order("memory_id", { ascending: true });
+    }
+
+    if (rowsRes.error) {
+      if (__DEV__) console.warn("[archive] memories load:", rowsRes.error.message);
+      return setItems([]);
+    }
+
+    const data = rowsRes.data;
 
     const entries = ((data as MemoryFileRow[] | null) ?? []).flatMap((m) => {
       const file = Array.isArray(m.files) ? m.files[0] : m.files;
@@ -369,17 +389,28 @@ export default function ArchiveTab() {
         return fail(`This image doesn't look like a memory worth saving (${context.reason}). Try another photo.`);
       }
 
-      const { data: memoryRow } = await supabase
+      const { data: memoryRow, error: insertMemErr } = await supabase
         .from("memories")
         .insert({
           user_id: user.id,
           source: "camera_roll",
           user_caption: caption.trim() || null,
-          want_to_do: wantToDoSaved || null,
         })
         .select("memory_id")
         .single();
-      if (!memoryRow) return fail("Could not create memory record.");
+      if (insertMemErr || !memoryRow) {
+        return fail(insertMemErr?.message ?? "Could not create memory record.");
+      }
+
+      if (wantToDoSaved) {
+        const { error: intentErr } = await supabase
+          .from("memories")
+          .update({ want_to_do: wantToDoSaved })
+          .eq("memory_id", memoryRow.memory_id);
+        if (__DEV__ && intentErr && !isUndefinedColumnError(intentErr, "want_to_do")) {
+          console.warn("[archive] could not save want_to_do:", intentErr.message);
+        }
+      }
 
       const storagePath = `${user.id}/${memoryRow.memory_id}/${fileName}`;
       const cleanupMemory = () =>
