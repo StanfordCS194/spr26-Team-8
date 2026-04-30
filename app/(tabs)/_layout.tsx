@@ -52,8 +52,9 @@ export default function TabsLayout() {
             },
           }}
         >
-          <Tabs.Screen name="archive" options={{ title: "Library" }} />
           <Tabs.Screen name="action" options={{ title: "Action" }} />
+          <Tabs.Screen name="archive" options={{ title: "Library" }} />
+          <Tabs.Screen name="notifications" options={{ title: "Notifications" }} />
         </Tabs>
       </View>
     </SafeAreaView>
