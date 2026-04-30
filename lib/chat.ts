@@ -5,6 +5,8 @@
 
 import { supabase } from "@/lib/supabase";
 
+import { logChatMessage } from "@/lib/chatLog";
+
 const USE_GENERATIVE_CHAT_API = true;
 
 /** Suggested prompts for the Action tab until API-driven suggestions exist. */
@@ -32,9 +34,8 @@ export async function sendChatMessage(userText: string): Promise<string> {
 
   const { data: memoryRows, error: memoryError } = await supabase
     .from("memories")
-    .select("ocr_description")
+    .select("want_to_do, user_caption, ocr_description")
     .eq("user_id", userId)
-    .not("ocr_description", "is", null)
     .order("memory_id", { ascending: false })
     .limit(80);
 
@@ -42,20 +43,25 @@ export async function sendChatMessage(userText: string): Promise<string> {
     throw new Error(`Could not load memory context: ${memoryError.message}`);
   }
 
-  const descriptions = (memoryRows ?? [])
-    .map((row) => row.ocr_description?.trim())
-    .filter((text): text is string => Boolean(text));
+  const snippets = (memoryRows ?? []).map((row) => {
+    const parts = [row.want_to_do, row.user_caption, row.ocr_description]
+      .map((x) => (typeof x === "string" ? x.trim() : ""))
+      .filter(Boolean);
+    return parts.length ? parts.join(" · ") : null;
+  }).filter((s): s is string => Boolean(s));
 
   const memoryContext =
-    descriptions.length > 0
-      ? descriptions.map((d, i) => `${i + 1}. ${d}`).join("\n")
-      : "No OCR descriptions are available yet.";
+    snippets.length > 0
+      ? snippets.map((s, i) => `${i + 1}. ${s}`).join("\n")
+      : "No memory text yet (captions / “want to” / OCR). Upload or add intents in Library.";
+
+  void logChatMessage(userId, "user", userText);
 
   const systemPrompt =
     "You are a planning assistant for the user's saved memories.\n" +
-    "Use ONLY the provided OCR memory descriptions as grounding context.\n" +
-    "When asked for a bucket list or itinerary, synthesize ideas from those memories.\n" +
-    "If context is sparse, say so and provide a best-effort draft.";
+    "Ground your answer in ONLY the numbered memory snippets (want-to intentions, captions, OCR).\n" +
+    "When asked for a bucket list or itinerary, synthesize actionable ideas.\n" +
+    "If context is sparse, say so briefly and suggest they add captions or ‘I want to…’ when uploading.";
 
   const response = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
@@ -71,7 +77,7 @@ export async function sendChatMessage(userText: string): Promise<string> {
         {
           role: "user",
           content:
-            `OCR memory descriptions:\n${memoryContext}\n\n` +
+            `Memory snippets:\n${memoryContext}\n\n` +
             `User request: ${userText.trim()}`,
         },
       ],
@@ -94,6 +100,8 @@ export async function sendChatMessage(userText: string): Promise<string> {
   if (!content) {
     throw new Error("OpenAI returned an empty response.");
   }
+
+  void logChatMessage(userId, "assistant", content);
 
   return content;
 }
