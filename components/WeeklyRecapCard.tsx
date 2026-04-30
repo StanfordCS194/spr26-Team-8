@@ -1,7 +1,9 @@
 import {
+  clearDismissedWeekAnchor,
   dismissWeekAnchor,
   getDismissedWeekAnchor,
   getWeeklyNudgeEnabled,
+  setWeeklyNudgeEnabled,
   subscribeNudgePreferenceChanges,
 } from "@/lib/nudgePrefs";
 import { supabase } from "@/lib/supabase";
@@ -37,14 +39,34 @@ function parseBulletLines(raw: string): string[] {
     .filter((line) => line.length > 0);
 }
 
-/** Light visual flair per row — keeps copy readable; pairs with punchy model prompts. */
-const LINE_FLAIR = ["✨", "🎯", "☕"] as const;
+function EmphasizedLine({ line }: { line: string }) {
+  const parts = useMemo(() => {
+    // Parse markdown-ish **bold** spans. We expect at most one, but handle multiples safely.
+    const tokens = line.split("**");
+    if (tokens.length === 1) return [{ text: line, bold: false }];
+    return tokens.map((t, i) => ({ text: t, bold: i % 2 === 1 }));
+  }, [line]);
+
+  return (
+    <Text className="text-[15px] leading-[22px] text-[#1A1A1A]">
+      {parts.map((p, i) => (
+        <Text key={`${i}-${p.text}`} className={p.bold ? "font-semibold" : undefined}>
+          {p.text}
+        </Text>
+      ))}
+    </Text>
+  );
+}
 
 /**
  * Weekly intent recap for the Action tab — polished card above the chat thread.
  */
 
-export function WeeklyRecapCard() {
+export function WeeklyRecapCard({
+  onPickPrompt,
+}: {
+  onPickPrompt?: (prompt: string) => void;
+}) {
   const [userId, setUserId] = useState<string | null>(null);
   const [weekAnchor] = useState(() => utcWeekAnchorMonday());
   const [prefsOn, setPrefsOn] = useState(true);
@@ -56,25 +78,30 @@ export function WeeklyRecapCard() {
   const [errorHint, setErrorHint] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
-    const { data: auth } = await supabase.auth.getUser();
-    const uid = auth.user?.id ?? null;
-    setUserId(uid);
-    if (!uid) {
+    try {
+      const { data: auth } = await supabase.auth.getUser();
+      const uid = auth.user?.id ?? null;
+      setUserId(uid);
+      if (!uid) {
+        setLoading(false);
+        return;
+      }
+
+      const [on, dismissed, recapRow] = await Promise.all([
+        getWeeklyNudgeEnabled(),
+        getDismissedWeekAnchor(uid),
+        fetchWeeklyRecap(weekAnchor),
+      ]);
+
+      setPrefsOn(on);
+      setDismissedAnchor(dismissed);
+      setRecap(recapRow);
+      setErrorHint(null);
       setLoading(false);
-      return;
+    } catch (e) {
+      setErrorHint(e instanceof Error ? e.message : "Could not load weekly nudges.");
+      setLoading(false);
     }
-
-    const [on, dismissed, recapRow] = await Promise.all([
-      getWeeklyNudgeEnabled(),
-      getDismissedWeekAnchor(uid),
-      fetchWeeklyRecap(weekAnchor),
-    ]);
-
-    setPrefsOn(on);
-    setDismissedAnchor(dismissed);
-    setRecap(recapRow);
-    setErrorHint(null);
-    setLoading(false);
   }, [weekAnchor]);
 
   useFocusEffect(
@@ -118,6 +145,17 @@ export function WeeklyRecapCard() {
     setDismissedAnchor(weekAnchor);
   }, [userId, weekAnchor]);
 
+  const onShowAgain = useCallback(async () => {
+    if (!userId) return;
+    await clearDismissedWeekAnchor(userId);
+    setDismissedAnchor(null);
+  }, [userId]);
+
+  const onEnable = useCallback(async () => {
+    await setWeeklyNudgeEnabled(true);
+    setPrefsOn(true);
+  }, []);
+
   const bulletLines = useMemo(
     () => (recap ? parseBulletLines(recap.bullets) : []),
     [recap]
@@ -130,9 +168,69 @@ export function WeeklyRecapCard() {
 
   const longTextFallback = Boolean(recap && bulletLines.length === 0 && recap.bullets.trim());
 
-  if (loading || !userId || !prefsOn) return null;
+  if (loading || !userId) return null;
 
-  if (dismissedAnchor === weekAnchor) return null;
+  if (!prefsOn) {
+    return (
+      <View className="mb-5 overflow-hidden rounded-3xl border border-[#E8E0D4] bg-white">
+        <View className="border-b border-[#F0EBE2] bg-[#FFFCF7] px-4 pb-3 pt-4">
+          <View className="flex-row items-start justify-between gap-3">
+            <View className="min-w-0 flex-1 flex-row items-start gap-3">
+              <View className="mt-0.5 h-10 w-10 items-center justify-center rounded-2xl bg-[#0B0B0B]">
+                <Ionicons name="sparkles" size={20} color="#FFFCF7" />
+              </View>
+              <View className="min-w-0 flex-1">
+                <Text className="text-lg font-bold tracking-[-0.3px] text-[#0B0B0B]">Your week</Text>
+                <Text className="mt-0.5 text-sm leading-5 text-[#6B6B6B]">
+                  Weekly nudges are turned off
+                </Text>
+              </View>
+            </View>
+          </View>
+        </View>
+        <View className="px-4 pb-4 pt-3">
+          <Pressable
+            onPress={() => void onEnable()}
+            className="flex-row items-center justify-center gap-2 rounded-2xl bg-[#0B0B0B] py-3.5 active:opacity-90"
+          >
+            <Ionicons name="toggle" size={18} color="#FFF" />
+            <Text className="text-base font-semibold text-white">Turn on nudges</Text>
+          </Pressable>
+        </View>
+      </View>
+    );
+  }
+
+  if (dismissedAnchor === weekAnchor) {
+    return (
+      <View className="mb-5 overflow-hidden rounded-3xl border border-[#E8E0D4] bg-white">
+        <View className="border-b border-[#F0EBE2] bg-[#FFFCF7] px-4 pb-3 pt-4">
+          <View className="flex-row items-start justify-between gap-3">
+            <View className="min-w-0 flex-1 flex-row items-start gap-3">
+              <View className="mt-0.5 h-10 w-10 items-center justify-center rounded-2xl bg-[#0B0B0B]">
+                <Ionicons name="sparkles" size={20} color="#FFFCF7" />
+              </View>
+              <View className="min-w-0 flex-1">
+                <Text className="text-lg font-bold tracking-[-0.3px] text-[#0B0B0B]">Your week</Text>
+                <Text className="mt-0.5 text-sm leading-5 text-[#6B6B6B]">
+                  Hidden for this week
+                </Text>
+              </View>
+            </View>
+            <Pressable
+              onPress={() => void onShowAgain()}
+              hitSlop={10}
+              accessibilityRole="button"
+              accessibilityLabel="Show weekly recap again"
+              className="rounded-full bg-[#F4F0EA] px-3 py-2 active:opacity-80"
+            >
+              <Text className="text-sm font-semibold text-[#0B0B0B]">Show</Text>
+            </Pressable>
+          </View>
+        </View>
+      </View>
+    );
+  }
 
   const isSetupHint =
     Boolean(errorHint) &&
@@ -256,17 +354,28 @@ export function WeeklyRecapCard() {
           <View>
             <View className="gap-2.5">
               {displayLines.map((line, i) => (
-                <View
+                <Pressable
                   key={`${i}-${line.slice(0, 24)}`}
-                  className="flex-row items-start gap-3 rounded-2xl border border-[#EFE8DF] bg-[#FAF8F5] px-3.5 py-3"
+                  accessibilityRole="button"
+                  onPress={() => onPickPrompt?.(line)}
+                  disabled={!onPickPrompt}
+                  className="overflow-hidden rounded-2xl border border-[#E6E1DA] bg-[#FFFCF8] px-3.5 py-3 shadow-sm active:opacity-70 disabled:opacity-100"
                 >
-                  <Text className="pt-0.5 text-lg leading-none">
-                    {LINE_FLAIR[i % LINE_FLAIR.length]}
-                  </Text>
-                  <Text className="min-w-0 flex-1 text-[15px] font-medium leading-[22px] text-[#1A1A1A]">
-                    {line}
-                  </Text>
-                </View>
+                  <View className="flex-row items-start gap-2.5">
+                    <View className="mt-0.5 h-6 w-6 items-center justify-center rounded-full bg-black/5">
+                      <Ionicons name="chatbubble-ellipses-outline" size={14} color="#0B0B0B" />
+                    </View>
+                    <View className="min-w-0 flex-1">
+                      <EmphasizedLine line={line} />
+                      {onPickPrompt ? (
+                        <Text className="mt-1 text-xs font-medium uppercase tracking-[0.16em] text-[#8A8278]">
+                          Tap to ask
+                        </Text>
+                      ) : null}
+                    </View>
+                    <Ionicons name="chevron-forward" size={16} color="#8A8278" />
+                  </View>
+                </Pressable>
               ))}
             </View>
 

@@ -128,7 +128,13 @@ export default function ActionTab() {
               scrollRef.current?.scrollToEnd({ animated: true })
             }
           >
-            <WeeklyRecapCard />
+            <WeeklyRecapCard
+              onPickPrompt={(prompt) => {
+                setShowQuickActions(false);
+                void appendExchange(prompt);
+                setInput("");
+              }}
+            />
             {messages.map((msg, i) => (
               <View
                 key={`${i}-${msg.role}`}
@@ -224,7 +230,11 @@ export default function ActionTab() {
                 onChangeText={setInput}
                 placeholder="What would you like to do today?"
                 placeholderTextColor="rgba(95, 95, 95, 0.55)"
-                className="min-h-[36px] flex-1 py-2 text-base text-[#0B0B0B]"
+                className="min-h-[36px] flex-1 text-[#0B0B0B]"
+                style={{ fontSize: 16, lineHeight: 22, paddingVertical: 0 }}
+                multiline={false}
+                scrollEnabled={false}
+                textAlignVertical="center"
                 editable={!sending}
                 onSubmitEditing={() => {
                   void appendExchange(input);

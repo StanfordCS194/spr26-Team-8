@@ -137,7 +137,9 @@ export async function generateWeeklyRecap(): Promise<{ bullets: string; week_anc
     "You write bite-sized weekly nudges for a mobile app called Venn.\n" +
     `Output EXACTLY ${WEEKLY_RECAP_LINE_COUNT} lines — no more, no less. Each line MUST start with '- '.\n` +
     "Tone: warm, concise, lightly playful (one tiny spark of personality — not cheesy, not corporate).\n" +
-    "Each line is ONE tight reminder (max ~14 words) of something they implied they want to do, try, book, buy, or revisit — from uploads or chat.\n" +
+    "Each line is ONE tight reminder (max ~11 words) of something they implied they want to do, try, book, buy, or revisit — from uploads or chat.\n" +
+    "In each line, wrap the concrete object/item of the action in double-asterisks for emphasis (exactly ONE bold span), like: - Book **dentist appointment**.\n" +
+    "Do not bold the verb; bold the thing (place/item/task/name). Do not include more than one **bold** span per line.\n" +
     "Use vivid verbs and plain language. No ‘Dear user’, no lecture. No duplicate ideas.\n" +
     "If context is thin, still output 3 lines: short honest guesses from what exists, and keep one line gently nudging them to add “I want to…” on Library uploads next time.";
 

@@ -42,3 +42,11 @@ export async function getDismissedWeekAnchor(userId: string): Promise<string | n
 export async function dismissWeekAnchor(userId: string, weekAnchor: string): Promise<void> {
   await AsyncStorage.setItem(DISMISS_PREFIX + userId, weekAnchor);
 }
+
+export async function clearDismissedWeekAnchor(userId: string): Promise<void> {
+  try {
+    await AsyncStorage.removeItem(DISMISS_PREFIX + userId);
+  } catch {
+    // ignore
+  }
+}
