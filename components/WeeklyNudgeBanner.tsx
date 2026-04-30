@@ -12,10 +12,10 @@ import { useCallback, useEffect, useState } from "react";
 import {
   ActivityIndicator,
   Pressable,
+  ScrollView,
   Text,
   View,
 } from "react-native";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 /**
  * Lightweight weekly “nudge”: shows condensed recap bullets for this UTC week.
@@ -23,7 +23,6 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
  */
 
 export function WeeklyNudgeBanner() {
-  const insets = useSafeAreaInsets();
   const [userId, setUserId] = useState<string | null>(null);
   const [weekAnchor] = useState(() => utcWeekAnchorMonday());
   const [prefsOn, setPrefsOn] = useState(true);
@@ -85,7 +84,8 @@ export function WeeklyNudgeBanner() {
         setDismissedAnchor(null);
       }
     } catch (e) {
-      setErrorHint(e instanceof Error ? e.message : "Could not generate recap.");
+      const raw = e instanceof Error ? e.message : "Could not generate recap.";
+      setErrorHint(raw);
     } finally {
       setGenerating(false);
     }
@@ -101,10 +101,16 @@ export function WeeklyNudgeBanner() {
 
   if (dismissedAnchor === weekAnchor) return null;
 
+  const isSetupHint =
+    Boolean(errorHint) &&
+    (errorHint!.includes("Weekly recap tables") ||
+      errorHint!.includes("supabase/migrations") ||
+      errorHint!.toLowerCase().includes("could not find the table"));
+
   return (
     <View
       className="border-b border-[#E6E1DA] bg-[#FFF9F0]"
-      style={{ paddingTop: insets.top > 12 ? 4 : insets.top, paddingHorizontal: 16, paddingBottom: 10 }}
+      style={{ paddingHorizontal: 16, paddingTop: 8, paddingBottom: 12 }}
     >
       <View className="flex-row items-center justify-between gap-2 pb-1">
         <Text className="flex-1 text-xs font-semibold uppercase tracking-[0.16em] text-[#6B6B6B]">
@@ -137,14 +143,28 @@ export function WeeklyNudgeBanner() {
         </View>
       ) : (
         <View className="gap-1 pt-1">
-          <Pressable onPress={() => setExpanded(!expanded)}>
-            <Text className="text-[15px] leading-6 text-[#0B0B0B]" numberOfLines={expanded ? undefined : 5}>
-              {recap.bullets}
-            </Text>
-          </Pressable>
+          {expanded ? (
+            <ScrollView
+              style={{ maxHeight: 220 }}
+              nestedScrollEnabled
+              showsVerticalScrollIndicator
+            >
+              <Text className="text-[15px] leading-6 text-[#0B0B0B]">{recap.bullets}</Text>
+            </ScrollView>
+          ) : (
+            <Pressable onPress={() => setExpanded(true)}>
+              <Text className="text-[15px] leading-6 text-[#0B0B0B]" numberOfLines={5}>
+                {recap.bullets}
+              </Text>
+            </Pressable>
+          )}
 
           {recap.bullets.trim().length > 280 ? (
-            <Text className="text-xs font-medium text-[#0B7AEE]">{expanded ? "Tap to shrink" : "Tap to expand"}</Text>
+            <Pressable onPress={() => setExpanded(!expanded)}>
+              <Text className="text-xs font-medium text-[#0B7AEE]">
+                {expanded ? "Tap to shrink" : "Tap to expand"}
+              </Text>
+            </Pressable>
           ) : null}
 
           <Pressable
@@ -158,7 +178,13 @@ export function WeeklyNudgeBanner() {
       )}
 
       {errorHint ? (
-        <Text className="mt-2 text-xs leading-5 text-red-600">{errorHint}</Text>
+        <Text
+          className={`mt-2 text-xs leading-5 ${isSetupHint ? "text-[#7A5C3E]" : "text-red-600"}`}
+        >
+          {isSetupHint
+            ? "One-time setup: in Supabase → SQL Editor, run the file supabase/migrations/20260430120000_weekly_nudge_chat.sql (creates weekly recap + chat tables). Then tap Make my recap again."
+            : errorHint}
+        </Text>
       ) : null}
     </View>
   );

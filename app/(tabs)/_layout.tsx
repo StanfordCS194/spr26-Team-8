@@ -3,6 +3,7 @@ import { useAuth } from "@/lib/auth";
 import { venn } from "@/lib/vennTheme";
 import { Redirect, Tabs } from "expo-router";
 import { ActivityIndicator, View } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 
 export default function TabsLayout() {
   const { session, isLoading } = useAuth();
@@ -20,7 +21,7 @@ export default function TabsLayout() {
   }
 
   return (
-    <View style={{ flex: 1 }}>
+    <SafeAreaView style={{ flex: 1, backgroundColor: "#F4F0EA" }} edges={["top", "left", "right"]}>
       <WeeklyNudgeBanner />
       <View style={{ flex: 1, minHeight: 0 }}>
         <Tabs
@@ -57,6 +58,6 @@ export default function TabsLayout() {
           <Tabs.Screen name="action" options={{ title: "Action" }} />
         </Tabs>
       </View>
-    </View>
+    </SafeAreaView>
   );
 }

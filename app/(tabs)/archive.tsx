@@ -654,7 +654,7 @@ export default function ArchiveTab() {
 
   return (
     <View className="flex-1 bg-[#F4F0EA]">
-      <SafeAreaView className="flex-1 bg-[#F4F0EA]" edges={["top", "left", "right"]}>
+      <SafeAreaView className="flex-1 bg-[#F4F0EA]" edges={["left", "right"]}>
         <View className="flex-1">
           <View className="px-5">
             <View className="pt-1.5">
