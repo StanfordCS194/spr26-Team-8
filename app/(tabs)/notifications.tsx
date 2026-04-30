@@ -1,10 +1,19 @@
 import { MarkdownishBoldLine } from "@/components/MarkdownishBoldLine";
+import { buildTentativePlanPrompt } from "@/lib/nudgePrompt";
 import { fetchWeeklyRecap, generateWeeklyRecap } from "@/lib/weeklyRecap";
 import { utcWeekAnchorMonday } from "@/lib/weekAnchor";
 import { Ionicons } from "@expo/vector-icons";
 import { useFocusEffect } from "@react-navigation/native";
+import { useRouter } from "expo-router";
 import { useCallback, useMemo, useState } from "react";
-import { ActivityIndicator, Pressable, ScrollView, Text, View } from "react-native";
+import {
+  ActivityIndicator,
+  Pressable,
+  RefreshControl,
+  ScrollView,
+  Text,
+  View,
+} from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { supabase } from "@/lib/supabase";
 
@@ -21,7 +30,9 @@ function parseBulletLines(raw: string): string[] {
 }
 
 export default function NotificationsTab() {
+  const router = useRouter();
   const [loading, setLoading] = useState(true);
+  const [pullRefreshing, setPullRefreshing] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [nudges, setNudges] = useState<string[]>([]);
@@ -30,9 +41,11 @@ export default function NotificationsTab() {
     { id: string; title: string; preview: string; created_at: string }[]
   >([]);
 
-  const refresh = useCallback(async () => {
-    setLoading(true);
+  const refresh = useCallback(async (opts?: { mode?: "initial" | "pull" }) => {
+    const mode = opts?.mode ?? "initial";
     setError(null);
+    if (mode === "pull") setPullRefreshing(true);
+    else setLoading(true);
     try {
       const { data: auth } = await supabase.auth.getUser();
       const user = auth.user;
@@ -49,13 +62,14 @@ export default function NotificationsTab() {
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not load notifications.");
     } finally {
-      setLoading(false);
+      if (mode === "pull") setPullRefreshing(false);
+      else setLoading(false);
     }
   }, []);
 
   useFocusEffect(
     useCallback(() => {
-      void refresh();
+      void refresh({ mode: "initial" });
       return undefined;
     }, [refresh])
   );
@@ -93,12 +107,22 @@ export default function NotificationsTab() {
           {subtitle}
         </Text>
 
-        <ScrollView className="flex-1 px-5" contentContainerClassName="pb-6">
+        <ScrollView
+          className="flex-1 px-5"
+          contentContainerClassName="pb-6"
+          refreshControl={
+            <RefreshControl
+              refreshing={pullRefreshing}
+              onRefresh={() => void refresh({ mode: "pull" })}
+              tintColor="#0B0B0B"
+            />
+          }
+        >
           {/* Nudges */}
           <View className="mt-2">
             <View className="flex-row items-center justify-between">
               <Text className="text-xs font-semibold uppercase tracking-[0.18em] text-[#6B6B6B]">
-                Nudges
+                Action items
               </Text>
               <Pressable
                 onPress={() => void handleGenerate()}
@@ -130,23 +154,45 @@ export default function NotificationsTab() {
               </View>
             ) : (
               <View className="mt-3 gap-2.5">
-                {nudges.map((line, idx) => (
-                  <View
-                    key={`${idx}-${line.slice(0, 24)}`}
-                    className="overflow-hidden rounded-2xl border border-[#E6E1DA] bg-[#FFFCF8] px-3.5 py-3 shadow-sm"
-                  >
-                    <View className="flex-row items-start gap-2.5">
-                      <View className="mt-0.5 h-6 w-6 items-center justify-center rounded-full bg-black/5">
-                        <Ionicons name="sparkles-outline" size={14} color="#0B0B0B" />
+                {nudges.map((line, idx) => {
+                  return (
+                    <View
+                      key={`${idx}-${line.slice(0, 24)}`}
+                      className="overflow-hidden rounded-2xl border border-[#E6E1DA] bg-[#FFFCF8] px-3.5 py-3 shadow-sm"
+                    >
+                      <View className="flex-row items-start gap-2.5">
+                        <View className="mt-0.5 h-6 w-6 shrink-0 items-center justify-center rounded-full bg-black/5">
+                          <Ionicons name="sparkles-outline" size={14} color="#0B0B0B" />
+                        </View>
+                        <View className="min-w-0 flex-1">
+                          <Pressable
+                            accessibilityRole="button"
+                            accessibilityLabel="Get a tentative plan in chat"
+                            onPress={() => {
+                              router.push({
+                                pathname: "/action",
+                                params: {
+                                  prompt: buildTentativePlanPrompt(line),
+                                  autosend: "1",
+                                },
+                              });
+                            }}
+                            className="active:opacity-80"
+                          >
+                            <View className="flex-row items-start gap-1">
+                              <MarkdownishBoldLine
+                                line={line}
+                                className="min-w-0 flex-1 text-[15px] leading-[22px] text-[#1A1A1A]"
+                                boldClassName="font-semibold"
+                              />
+                              <Ionicons name="chevron-forward" size={16} color="#8A8278" />
+                            </View>
+                          </Pressable>
+                        </View>
                       </View>
-                      <MarkdownishBoldLine
-                        line={line}
-                        className="min-w-0 flex-1 text-[15px] leading-[22px] text-[#1A1A1A]"
-                        boldClassName="font-semibold"
-                      />
                     </View>
-                  </View>
-                ))}
+                  );
+                })}
               </View>
             )}
           </View>
@@ -212,16 +258,6 @@ export default function NotificationsTab() {
             </View>
           ) : null}
 
-          <View className="mt-6 flex-row items-center justify-end">
-            <Pressable
-              onPress={() => void refresh()}
-              disabled={loading || generating}
-              className="flex-row items-center gap-1.5 rounded-full border border-[#E6E1DA] bg-white px-3.5 py-2 active:bg-[#FAF7F2] disabled:opacity-50"
-            >
-              <Ionicons name="refresh-outline" size={18} color="#0B0B0B" />
-              <Text className="text-sm font-semibold text-[#0B0B0B]">Refresh</Text>
-            </Pressable>
-          </View>
         </ScrollView>
       </SafeAreaView>
     </View>

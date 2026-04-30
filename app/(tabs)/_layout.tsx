@@ -26,26 +26,20 @@ export default function TabsLayout() {
         <Tabs
           screenOptions={{
             headerShown: false,
+            tabBarShowLabel: false,
             tabBarActiveTintColor: venn.text,
             tabBarInactiveTintColor: "rgba(95, 95, 95, 0.75)",
             tabBarStyle: {
               backgroundColor: venn.tabBar,
               borderTopColor: venn.hairline,
               borderTopWidth: 0.5,
-              height: 82,
-              paddingBottom: 12,
-              paddingTop: 8,
+              height: 64,
+              paddingBottom: 10,
+              paddingTop: 10,
             },
             tabBarItemStyle: {
               justifyContent: "center",
               alignItems: "center",
-            },
-            tabBarLabelStyle: {
-              fontSize: 11,
-              fontWeight: "600",
-              marginBottom: 0,
-              marginTop: 0,
-              letterSpacing: 0.2,
             },
           }}
         >

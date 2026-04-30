@@ -1,6 +1,9 @@
+import { MarkdownishBoldLine } from "@/components/MarkdownishBoldLine";
 import { CHAT_PROMPTS, sendChatMessage } from "@/lib/chat";
 import { posthog } from "@/lib/posthog";
 import { Ionicons } from "@expo/vector-icons";
+import { useFocusEffect } from "@react-navigation/native";
+import { router, useLocalSearchParams } from "expo-router";
 import { useCallback, useRef, useState } from "react";
 import { Image } from "expo-image";
 import * as ImagePicker from "expo-image-picker";
@@ -24,7 +27,33 @@ type SelectedImage = {
   fileName?: string | null;
 };
 
+function AssistantMessageBody({ content }: { content: string }) {
+  const lines = content.split(/\n/);
+  return (
+    <View className="gap-1.5">
+      {lines.map((raw, i) => {
+        const line = raw.trimEnd();
+        if (line.trim() === "") {
+          return <View key={`gap-${i}`} className="h-1" />;
+        }
+        return (
+          <MarkdownishBoldLine
+            key={`ln-${i}`}
+            line={line}
+            className="text-base leading-6 text-[#0B0B0B]"
+            boldClassName="font-semibold"
+          />
+        );
+      })}
+    </View>
+  );
+}
+
 export default function ActionTab() {
+  const params = useLocalSearchParams<{
+    prompt?: string | string[];
+    autosend?: string | string[];
+  }>();
   const [input, setInput] = useState("");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [selectedImages, setSelectedImages] = useState<SelectedImage[]>([]);
@@ -32,6 +61,86 @@ export default function ActionTab() {
   const [showQuickActions, setShowQuickActions] = useState(true);
   const scrollRef = useRef<ScrollView>(null);
   const chatSessionId = useRef(`chat-${Date.now()}`).current;
+
+  const appendExchange = useCallback(
+    async (userText: string, opts?: { silent?: boolean }) => {
+      const trimmed = userText.trim();
+      if (!trimmed || sending) return;
+      const silent = Boolean(opts?.silent);
+      setShowQuickActions(false);
+      setSending(true);
+      if (!silent) {
+        setMessages((m) => [...m, { role: "user", text: trimmed }]);
+      }
+      posthog.capture("chat_message_sent", {
+        chat_session_id: chatSessionId,
+        silent_handoff: silent ? 1 : 0,
+      });
+      try {
+        const reply = await sendChatMessage(
+          trimmed,
+          silent ? { style: "inbox_action_plan" } : undefined
+        );
+        setMessages((m) => [...m, { role: "assistant", text: reply }]);
+      } catch (err) {
+        setMessages((m) => [
+          ...m,
+          {
+            role: "assistant",
+            text:
+              err instanceof Error
+                ? `Sorry, I could not generate a response: ${err.message}`
+                : "Sorry, I could not generate a response right now.",
+          },
+        ]);
+      } finally {
+        setSending(false);
+        requestAnimationFrame(() => scrollRef.current?.scrollToEnd({ animated: true }));
+      }
+    },
+    [sending, chatSessionId]
+  );
+
+  useFocusEffect(
+    useCallback(() => {
+      const raw = params.prompt;
+      const promptRaw = typeof raw === "string" ? raw : Array.isArray(raw) ? raw[0] : undefined;
+      if (!promptRaw) return undefined;
+
+      const rawAuto = params.autosend;
+      const autoFlag =
+        rawAuto === "1" ||
+        rawAuto === "true" ||
+        (Array.isArray(rawAuto) && rawAuto.some((x) => x === "1" || x === "true"));
+
+      let decoded = promptRaw;
+      if (decoded.includes("%")) {
+        try {
+          decoded = decodeURIComponent(decoded);
+        } catch {
+          // Keep original if decoding fails (e.g. stray "%" from user content)
+        }
+      }
+
+      const plain = decoded
+        .replace(/\*\*/g, "")
+        .replace(/\\\*/g, "")
+        .trim();
+
+      router.setParams({ prompt: undefined, autosend: undefined });
+
+      if (plain.length > 0) {
+        if (autoFlag) {
+          void appendExchange(plain, { silent: true });
+          setInput("");
+        } else {
+          setInput(plain);
+          setShowQuickActions(false);
+        }
+      }
+      return undefined;
+    }, [params.prompt, params.autosend, appendExchange])
+  );
 
   const pickImages = useCallback(async () => {
     if (sending) return;
@@ -77,33 +186,6 @@ export default function ActionTab() {
     });
   }, [sending]);
 
-  const appendExchange = useCallback(async (userText: string) => {
-    const trimmed = userText.trim();
-    if (!trimmed || sending) return;
-    setShowQuickActions(false);
-    setSending(true);
-    setMessages((m) => [...m, { role: "user", text: trimmed }]);
-    posthog.capture("chat_message_sent", { chat_session_id: chatSessionId });
-    try {
-      const reply = await sendChatMessage(trimmed);
-      setMessages((m) => [...m, { role: "assistant", text: reply }]);
-    } catch (err) {
-      setMessages((m) => [
-        ...m,
-        {
-          role: "assistant",
-          text:
-            err instanceof Error
-              ? `Sorry, I could not generate a response: ${err.message}`
-              : "Sorry, I could not generate a response right now.",
-        },
-      ]);
-    } finally {
-      setSending(false);
-      requestAnimationFrame(() => scrollRef.current?.scrollToEnd({ animated: true }));
-    }
-  }, [sending, chatSessionId]);
-
   return (
     <View className="flex-1 bg-[#F4F0EA]">
       <KeyboardAvoidingView
@@ -135,13 +217,11 @@ export default function ActionTab() {
                       : "self-start border border-[#E6E1DA] bg-white shadow-sm"
                   }`}
                 >
-                  <Text
-                    className={`text-base leading-6 ${
-                      msg.role === "user" ? "text-white" : "text-[#0B0B0B]"
-                    }`}
-                  >
-                    {msg.text}
-                  </Text>
+                  {msg.role === "user" ? (
+                    <Text className="text-base leading-6 text-white">{msg.text}</Text>
+                  ) : (
+                    <AssistantMessageBody content={msg.text} />
+                  )}
                 </View>
               ))}
               {sending ? (
