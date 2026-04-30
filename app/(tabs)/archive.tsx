@@ -3,12 +3,16 @@ import {
   archiveIndexForBackend,
   distinctThemes,
   enrichArchiveRows,
-  fileNameFromArchiveId,
   hydrateArchiveMeta,
   mergeArchiveMeta,
   searchAndRankArchiveRows,
 } from "@/lib/archiveSearchAndCluster";
-import { loadSupplementalSearchText, removeSupplementalSearchText, upsertSupplementalSearchText } from "@/lib/archiveSupplementalSearchText";
+import {
+  loadSupplementalSearchText,
+  mergeSupplementalStrings,
+  removeSupplementalSearchText,
+  upsertSupplementalSearchText,
+} from "@/lib/archiveSupplementalSearchText";
 import { checkImageContext, moderateUpload } from "@/lib/moderation";
 import { fetchRemoteArchiveMeta, notifyArchiveIndexUpdated } from "@/lib/archiveBackendSync";
 import { fetchEmbeddingThemeOverrides } from "@/lib/embeddingThemes";
@@ -48,6 +52,10 @@ type BoardItem = {
   id: string;
   source: ImageSourcePropType;
   height: number;
+  /** From `files.file_name` — used for tag/theme inference and keyword search (not raw memory UUID). */
+  searchFileName: string;
+  /** From `memories.ocr_description` + `user_caption`; merged with local supplemental OCR cache. */
+  serverSearchText: string;
 };
 
 type GridCell = {
@@ -56,9 +64,12 @@ type GridCell = {
 
 type MemoryFileRow = {
   memory_id: string;
-  user_caption: string | null;
   ocr_description: string | null;
-  files: { storage_path: string } | { storage_path: string }[] | null;
+  user_caption: string | null;
+  files:
+    | { storage_path: string; file_name: string }
+    | { storage_path: string; file_name: string }[]
+    | null;
 };
 
 const isJpegAsset = (mimeType?: string | null, fileName?: string | null) => {
@@ -94,7 +105,6 @@ export default function ArchiveTab() {
   const [searchQuery, setSearchQuery] = useState("");
   const [themeFilter, setThemeFilter] = useState<"all" | string>("all");
   const [supplementalSearchById, setSupplementalSearchById] = useState<Record<string, string>>({});
-  const [serverSearchTextById, setServerSearchTextById] = useState<Record<string, string>>({});
   const [selectedItem, setSelectedItem] = useState<BoardItem | null>(null);
   const [pendingAsset, setPendingAsset] = useState<ImagePicker.ImagePickerAsset | null>(null);
   const [captionDraft, setCaptionDraft] = useState("");
@@ -122,29 +132,29 @@ export default function ArchiveTab() {
 
   const loadItems = useCallback(async () => {
     const { data: { user } } = await supabase.auth.getUser();
-    if (!user) {
-      setServerSearchTextById({});
-      return setItems([]);
-    }
+    if (!user) return setItems([]);
 
     const { data } = await supabase
       .from("memories")
-      .select("memory_id, user_caption, ocr_description, files(storage_path)")
+      .select("memory_id, ocr_description, user_caption, files(storage_path, file_name)")
       .eq("user_id", user.id)
       .not("file_id", "is", null)
       .order("memory_id", { ascending: true });
 
-    const rows = (data as MemoryFileRow[] | null) ?? [];
-    const serverText: Record<string, string> = {};
-    for (const m of rows) {
-      const text = [m.user_caption, m.ocr_description].filter(Boolean).join(" ").trim();
-      if (text) serverText[`uploaded-${m.memory_id}`] = text;
-    }
-    setServerSearchTextById(serverText);
-
-    const entries = rows.flatMap((m) => {
+    const entries = ((data as MemoryFileRow[] | null) ?? []).flatMap((m) => {
       const file = Array.isArray(m.files) ? m.files[0] : m.files;
-      return file ? [{ memory_id: m.memory_id, storage_path: file.storage_path }] : [];
+      if (!file) return [];
+      const ocr = m.ocr_description?.trim() ?? "";
+      const cap = m.user_caption?.trim() ?? "";
+      const serverSearchText = [ocr, cap].filter(Boolean).join(" ");
+      return [
+        {
+          memory_id: m.memory_id,
+          storage_path: file.storage_path,
+          searchFileName: file.file_name,
+          serverSearchText,
+        },
+      ];
     });
     if (entries.length === 0) return setItems([]);
 
@@ -161,6 +171,8 @@ export default function ArchiveTab() {
               id: `uploaded-${entries[i].memory_id}`,
               source: { uri: s.signedUrl },
               height: imageHeights[i % imageHeights.length],
+              searchFileName: entries[i].searchFileName,
+              serverSearchText: entries[i].serverSearchText,
             }]
           : []
       )
@@ -194,7 +206,7 @@ export default function ArchiveTab() {
   useEffect(() => {
     const ids = items.map((item) => ({
       id: item.id,
-      fileName: fileNameFromArchiveId(item.id),
+      fileName: item.searchFileName,
     }));
 
     let cancelled = false;
@@ -214,15 +226,19 @@ export default function ArchiveTab() {
   }, [items]);
 
   const indexRows = useMemo(() => {
-    const combined: Record<string, string> = { ...serverSearchTextById };
-    for (const [id, text] of Object.entries(supplementalSearchById)) {
-      combined[id] = combined[id] ? `${combined[id]} ${text}` : text;
+    const fileNameById = Object.fromEntries(items.map((b) => [b.id, b.searchFileName]));
+    const searchableTextById: Record<string, string> = { ...supplementalSearchById };
+    for (const item of items) {
+      const server = item.serverSearchText.trim();
+      if (!server) continue;
+      searchableTextById[item.id] = mergeSupplementalStrings(searchableTextById[item.id], server);
     }
     return enrichArchiveRows(items.map((b) => b.id), meta, {
       themeOverrides,
-      searchableTextById: combined,
+      fileNameById,
+      searchableTextById,
     });
-  }, [items, meta, themeOverrides, supplementalSearchById, serverSearchTextById]);
+  }, [items, meta, themeOverrides, supplementalSearchById]);
 
   const indexPayload = useMemo(() => archiveIndexForBackend(indexRows), [indexRows]);
 

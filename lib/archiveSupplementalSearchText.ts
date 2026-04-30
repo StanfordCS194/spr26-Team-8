@@ -34,14 +34,18 @@ async function writeAll(byId: Record<string, string>): Promise<void> {
   await FileSystem.writeAsStringAsync(storePath, JSON.stringify(payload));
 }
 
-function mergeChunk(prev: string | undefined, add: string): string {
+export function mergeSupplementalStrings(prev: string | undefined, add: string | undefined): string {
   const a = (prev ?? "").trim();
-  const b = add.trim();
+  const b = (add ?? "").trim();
   if (!b) return a;
   if (!a) return b;
   if (a.includes(b)) return a;
   if (b.includes(a)) return b;
   return `${a} ${b}`;
+}
+
+function mergeChunk(prev: string | undefined, add: string): string {
+  return mergeSupplementalStrings(prev, add);
 }
 
 export async function removeSupplementalSearchText(id: string): Promise<Record<string, string>> {
