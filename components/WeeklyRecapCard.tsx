@@ -14,6 +14,7 @@ import {
   WEEKLY_RECAP_LINE_COUNT,
   type WeeklyRecapRow,
 } from "@/lib/weeklyRecap";
+import { MarkdownishBoldLine } from "@/components/MarkdownishBoldLine";
 import { Ionicons } from "@expo/vector-icons";
 import { useFocusEffect } from "@react-navigation/native";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -37,25 +38,6 @@ function parseBulletLines(raw: string): string[] {
         .trim()
     )
     .filter((line) => line.length > 0);
-}
-
-function EmphasizedLine({ line }: { line: string }) {
-  const parts = useMemo(() => {
-    // Parse markdown-ish **bold** spans. We expect at most one, but handle multiples safely.
-    const tokens = line.split("**");
-    if (tokens.length === 1) return [{ text: line, bold: false }];
-    return tokens.map((t, i) => ({ text: t, bold: i % 2 === 1 }));
-  }, [line]);
-
-  return (
-    <Text className="text-[15px] leading-[22px] text-[#1A1A1A]">
-      {parts.map((p, i) => (
-        <Text key={`${i}-${p.text}`} className={p.bold ? "font-semibold" : undefined}>
-          {p.text}
-        </Text>
-      ))}
-    </Text>
-  );
 }
 
 /**
@@ -366,7 +348,11 @@ export function WeeklyRecapCard({
                       <Ionicons name="chatbubble-ellipses-outline" size={14} color="#0B0B0B" />
                     </View>
                     <View className="min-w-0 flex-1">
-                      <EmphasizedLine line={line} />
+                      <MarkdownishBoldLine
+                        line={line}
+                        className="text-[15px] leading-[22px] text-[#1A1A1A]"
+                        boldClassName="font-semibold"
+                      />
                       {onPickPrompt ? (
                         <Text className="mt-1 text-xs font-medium uppercase tracking-[0.16em] text-[#8A8278]">
                           Tap to ask
