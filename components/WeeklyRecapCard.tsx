@@ -7,18 +7,33 @@ import {
 import { supabase } from "@/lib/supabase";
 import { utcWeekAnchorMonday } from "@/lib/weekAnchor";
 import { fetchWeeklyRecap, generateWeeklyRecap, type WeeklyRecapRow } from "@/lib/weeklyRecap";
+import { Ionicons } from "@expo/vector-icons";
 import { useFocusEffect } from "@react-navigation/native";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
+  Platform,
   Pressable,
   ScrollView,
   Text,
   View,
 } from "react-native";
 
+/** Split model output into clean lines for list UI. */
+function parseBulletLines(raw: string): string[] {
+  return raw
+    .split(/\n/)
+    .map((line) =>
+      line
+        .replace(/^\s*[-*•]\s*/, "")
+        .replace(/^\s*\d+[.)]\s*/, "")
+        .trim()
+    )
+    .filter((line) => line.length > 0);
+}
+
 /**
- * Weekly intent recap for the Action tab (uploads + Action chat), shown above the message list.
+ * Weekly intent recap for the Action tab — polished card above the chat thread.
  */
 
 export function WeeklyRecapCard() {
@@ -95,6 +110,15 @@ export function WeeklyRecapCard() {
     setDismissedAnchor(weekAnchor);
   }, [userId, weekAnchor]);
 
+  const bulletLines = useMemo(
+    () => (recap ? parseBulletLines(recap.bullets) : []),
+    [recap]
+  );
+
+  const visibleLines = expanded ? bulletLines : bulletLines.slice(0, 4);
+  const hasHiddenLines = bulletLines.length > 4;
+  const longTextFallback = Boolean(recap && bulletLines.length === 0 && recap.bullets.trim());
+
   if (loading || !userId || !prefsOn) return null;
 
   if (dismissedAnchor === weekAnchor) return null;
@@ -105,84 +129,194 @@ export function WeeklyRecapCard() {
       errorHint!.includes("supabase/migrations") ||
       errorHint!.toLowerCase().includes("could not find the table"));
 
+  const cardShadow = Platform.select({
+    ios: {
+      shadowColor: "#1A1208",
+      shadowOffset: { width: 0, height: 6 },
+      shadowOpacity: 0.08,
+      shadowRadius: 16,
+    },
+    android: { elevation: 4 },
+    default: {},
+  });
+
   return (
     <View
-      className="mb-4 overflow-hidden rounded-[22px] border border-[#E6E1DA] bg-[#FFFCF8] px-4 py-3 shadow-sm"
+      className="mb-5 overflow-hidden rounded-3xl border border-[#E8E0D4] bg-white"
+      style={cardShadow}
     >
-      <View className="flex-row items-center justify-between gap-2 pb-1">
-        <Text className="flex-1 text-xs font-semibold uppercase tracking-[0.16em] text-[#6B6B6B]">
-          This week
-        </Text>
-        <Pressable onPress={() => void onDismiss()} hitSlop={8} accessibilityLabel="Dismiss weekly recap">
-          <Text className="text-xs font-semibold text-[#5F5F5F]">Dismiss</Text>
-        </Pressable>
+      <View className="border-b border-[#F0EBE2] bg-[#FFFCF7] px-4 pb-3 pt-4">
+        <View className="flex-row items-start justify-between gap-3">
+          <View className="min-w-0 flex-1 flex-row items-start gap-3">
+            <View className="mt-0.5 h-10 w-10 items-center justify-center rounded-2xl bg-[#0B0B0B]">
+              <Ionicons name="sparkles" size={20} color="#FFFCF7" />
+            </View>
+            <View className="min-w-0 flex-1">
+              <Text className="text-lg font-bold tracking-[-0.3px] text-[#0B0B0B]">Your week</Text>
+              <Text className="mt-0.5 text-sm leading-5 text-[#6B6B6B]">
+                A gentle nudge from what you’ve saved and chatted about
+              </Text>
+            </View>
+          </View>
+          <Pressable
+            onPress={() => void onDismiss()}
+            hitSlop={10}
+            accessibilityLabel="Hide weekly recap for this week"
+            className="rounded-full p-1.5 active:bg-black/5"
+          >
+            <Ionicons name="close" size={22} color="#8A8278" />
+          </Pressable>
+        </View>
       </View>
 
-      {!recap ? (
-        <View className="gap-2 pt-1">
-          <Text className="text-sm leading-5 text-[#3A3A3A]">
-            Your priorities from Library (“I want to…”) and this chat, summarized as a short list.
-          </Text>
-          <Pressable
-            onPress={() => void tryGenerate()}
-            disabled={generating}
-            className="self-start rounded-full bg-[#0B0B0B] px-4 py-2.5 active:opacity-80 disabled:opacity-40"
-          >
-            {generating ? (
-              <View className="flex-row items-center gap-2">
-                <ActivityIndicator color="#FFF" />
-                <Text className="text-sm font-semibold text-white">Working…</Text>
-              </View>
-            ) : (
-              <Text className="text-sm font-semibold text-white">Make my recap</Text>
-            )}
-          </Pressable>
-        </View>
-      ) : (
-        <View className="gap-1 pt-1">
-          {expanded ? (
-            <ScrollView
-              style={{ maxHeight: 220 }}
-              nestedScrollEnabled
-              showsVerticalScrollIndicator
+      <View className="px-4 pb-4 pt-3">
+        {!recap ? (
+          <View className="gap-4">
+            <View className="flex-row items-center gap-2 rounded-2xl bg-[#F4F0EA] px-3 py-2.5">
+              <Ionicons name="images-outline" size={18} color="#5C534A" />
+              <Text className="flex-1 text-sm leading-5 text-[#4A4540]">
+                We’ll pull from your Library “I want to…” lines and this conversation.
+              </Text>
+            </View>
+            <Pressable
+              onPress={() => void tryGenerate()}
+              disabled={generating}
+              className="flex-row items-center justify-center gap-2 rounded-2xl bg-[#0B0B0B] py-3.5 active:opacity-90 disabled:opacity-40"
             >
-              <Text className="text-[15px] leading-6 text-[#0B0B0B]">{recap.bullets}</Text>
-            </ScrollView>
-          ) : (
-            <Pressable onPress={() => setExpanded(true)}>
-              <Text className="text-[15px] leading-6 text-[#0B0B0B]" numberOfLines={5}>
-                {recap.bullets}
-              </Text>
+              {generating ? (
+                <>
+                  <ActivityIndicator color="#FFF" />
+                  <Text className="text-base font-semibold text-white">Putting it together…</Text>
+                </>
+              ) : (
+                <>
+                  <Ionicons name="create-outline" size={20} color="#FFF" />
+                  <Text className="text-base font-semibold text-white">Build my recap</Text>
+                </>
+              )}
             </Pressable>
-          )}
+          </View>
+        ) : longTextFallback ? (
+          <View>
+            {expanded ? (
+              <ScrollView
+                style={{ maxHeight: 280 }}
+                nestedScrollEnabled
+                showsVerticalScrollIndicator
+              >
+                <Text className="text-[15px] leading-6 text-[#2C2C2C]">{recap.bullets}</Text>
+              </ScrollView>
+            ) : (
+              <Pressable onPress={() => setExpanded(true)}>
+                <Text className="text-[15px] leading-6 text-[#2C2C2C]" numberOfLines={6}>
+                  {recap.bullets}
+                </Text>
+              </Pressable>
+            )}
+            <View className="mt-3 flex-row items-center justify-between">
+              {recap.bullets.length > 200 ? (
+                <Pressable
+                  onPress={() => setExpanded(!expanded)}
+                  className="flex-row items-center gap-1"
+                >
+                  <Text className="text-sm font-semibold text-[#0B7AEE]">
+                    {expanded ? "Show less" : "Read more"}
+                  </Text>
+                  <Ionicons
+                    name={expanded ? "chevron-up" : "chevron-down"}
+                    size={16}
+                    color="#0B7AEE"
+                  />
+                </Pressable>
+              ) : (
+                <View />
+              )}
+              <Pressable
+                disabled={generating}
+                onPress={() => void tryGenerate()}
+                className="flex-row items-center gap-1.5 rounded-full bg-[#F4F0EA] px-3 py-2 active:opacity-80"
+              >
+                <Ionicons name="refresh" size={16} color="#0B0B0B" />
+                <Text className="text-sm font-semibold text-[#0B0B0B]">Refresh</Text>
+              </Pressable>
+            </View>
+          </View>
+        ) : (
+          <View>
+            <View className="gap-0.5">
+              {visibleLines.map((line, i) => (
+                <View
+                  key={`${i}-${line.slice(0, 24)}`}
+                  className="flex-row gap-3 border-b border-[#F4F0EA] py-2.5 last:border-b-0"
+                >
+                  <View className="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-[#0B7AEE]" />
+                  <Text className="min-w-0 flex-1 text-[15px] leading-[22px] text-[#2C2C2C]">
+                    {line}
+                  </Text>
+                </View>
+              ))}
+            </View>
 
-          {recap.bullets.trim().length > 280 ? (
-            <Pressable onPress={() => setExpanded(!expanded)}>
-              <Text className="text-xs font-medium text-[#0B7AEE]">
-                {expanded ? "Tap to shrink" : "Tap to expand"}
-              </Text>
-            </Pressable>
-          ) : null}
+            {hasHiddenLines ? (
+              <Pressable
+                onPress={() => setExpanded(!expanded)}
+                className="mt-2 flex-row items-center justify-center gap-1 self-center py-2"
+              >
+                <Text className="text-sm font-semibold text-[#0B7AEE]">
+                  {expanded ? "Show less" : `Show ${bulletLines.length - 4} more`}
+                </Text>
+                <Ionicons
+                  name={expanded ? "chevron-up" : "chevron-down"}
+                  size={16}
+                  color="#0B7AEE"
+                />
+              </Pressable>
+            ) : null}
 
-          <Pressable
-            className="mt-1 self-start"
-            disabled={generating}
-            onPress={() => void tryGenerate()}
+            <View className="mt-3 flex-row items-center justify-end border-t border-[#F0EBE2] pt-3">
+              <Pressable
+                disabled={generating}
+                onPress={() => void tryGenerate()}
+                className="flex-row items-center gap-1.5 rounded-full border border-[#E6E1DA] bg-white px-3.5 py-2 active:bg-[#FAF7F2]"
+              >
+                {generating ? (
+                  <ActivityIndicator size="small" color="#0B0B0B" />
+                ) : (
+                  <Ionicons name="refresh-outline" size={18} color="#0B0B0B" />
+                )}
+                <Text className="text-sm font-semibold text-[#0B0B0B]">
+                  {generating ? "Updating…" : "Refresh recap"}
+                </Text>
+              </Pressable>
+            </View>
+          </View>
+        )}
+
+        {errorHint ? (
+          <View
+            className={`mt-4 rounded-2xl px-3 py-3 ${
+              isSetupHint ? "bg-[#FFF4E5] border border-[#E8D4B8]" : "bg-red-50 border border-red-100"
+            }`}
           >
-            <Text className="text-sm font-semibold text-[#5F5F5F]">Refresh recap</Text>
-          </Pressable>
-        </View>
-      )}
-
-      {errorHint ? (
-        <Text
-          className={`mt-2 text-xs leading-5 ${isSetupHint ? "text-[#7A5C3E]" : "text-red-600"}`}
-        >
-          {isSetupHint
-            ? "One-time setup: in Supabase → SQL Editor, run the file supabase/migrations/20260430120000_weekly_nudge_chat.sql. Then tap Make my recap again."
-            : errorHint}
-        </Text>
-      ) : null}
+            <View className="flex-row gap-2">
+              <Ionicons
+                name={isSetupHint ? "information-circle" : "alert-circle"}
+                size={20}
+                color={isSetupHint ? "#9A6B2D" : "#B91C1C"}
+              />
+              <Text
+                className={`min-w-0 flex-1 text-sm leading-5 ${
+                  isSetupHint ? "text-[#5C4A32]" : "text-red-800"
+                }`}
+              >
+                {isSetupHint
+                  ? "Run the SQL file supabase/migrations/20260430120000_weekly_nudge_chat.sql in Supabase (SQL Editor), then tap Build my recap again."
+                  : errorHint}
+              </Text>
+            </View>
+          </View>
+        ) : null}
+      </View>
     </View>
   );
 }
