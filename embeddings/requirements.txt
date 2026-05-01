@@ -1,0 +1,6 @@
+fastapi
+torch
+open_clip_torch
+pillow
+pyjwt
+requests

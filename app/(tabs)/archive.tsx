@@ -16,6 +16,7 @@ import {
 import { checkImageContext, moderateUpload } from "@/lib/moderation";
 import { fetchRemoteArchiveMeta, notifyArchiveIndexUpdated } from "@/lib/archiveBackendSync";
 import { fetchEmbeddingThemeOverrides } from "@/lib/embeddingThemes";
+import { embedAndStoreImage, searchByEmbedding } from "@/lib/embeddings";
 import { getWeeklyNudgeEnabled, setWeeklyNudgeEnabled } from "@/lib/nudgePrefs";
 import { extractSearchableTextFromImage } from "@/lib/vision";
 import { posthog } from "@/lib/posthog";
@@ -107,6 +108,7 @@ export default function ArchiveTab() {
   const [meta, setMeta] = useState<Record<string, ArchiveItemMeta>>({});
   const [themeOverrides, setThemeOverrides] = useState<Record<string, string>>({});
   const [searchQuery, setSearchQuery] = useState("");
+  const [vectorRankedIds, setVectorRankedIds] = useState<string[] | null>(null);
   const [themeFilter, setThemeFilter] = useState<"all" | string>("all");
   const [supplementalSearchById, setSupplementalSearchById] = useState<Record<string, string>>({});
   const [selectedItem, setSelectedItem] = useState<BoardItem | null>(null);
@@ -279,6 +281,24 @@ export default function ArchiveTab() {
     void notifyArchiveIndexUpdated(indexPayload);
   }, [indexPayload]);
 
+  useEffect(() => {
+    const trimmed = searchQuery.trim();
+    if (trimmed.length < 3) {
+      setVectorRankedIds(null);
+      return;
+    }
+    const controller = new AbortController();
+    const handle = setTimeout(() => {
+      void searchByEmbedding(trimmed, { signal: controller.signal }).then((ids) => {
+        if (!controller.signal.aborted) setVectorRankedIds(ids);
+      });
+    }, 350);
+    return () => {
+      clearTimeout(handle);
+      controller.abort();
+    };
+  }, [searchQuery]);
+
   const searchResults = useMemo(
     () => searchAndRankArchiveRows(indexRows, searchQuery, themeFilter),
     [indexRows, searchQuery, themeFilter]
@@ -292,14 +312,22 @@ export default function ArchiveTab() {
   );
 
   const gridCells = useMemo((): GridCell[] => {
-    return searchResults
+    const cells = searchResults
       .map((result) => {
         const item = itemsById.get(result.row.id);
         if (!item) return null;
         return { item };
       })
       .filter((cell): cell is GridCell => Boolean(cell));
-  }, [searchResults, itemsById]);
+    if (!vectorRankedIds) return cells;
+    const rank = new Map(vectorRankedIds.map((id, idx) => [id, idx] as const));
+    const stripPrefix = (id: string) => id.replace(/^uploaded-/, "");
+    return [...cells].sort((a, b) => {
+      const ai = rank.get(stripPrefix(a.item.id)) ?? Number.MAX_SAFE_INTEGER;
+      const bi = rank.get(stripPrefix(b.item.id)) ?? Number.MAX_SAFE_INTEGER;
+      return ai - bi;
+    });
+  }, [searchResults, itemsById, vectorRankedIds]);
 
   const leftColumnCells = gridCells.filter((_, index) => index % 2 === 0);
   const rightColumnCells = gridCells.filter((_, index) => index % 2 === 1);
@@ -481,6 +509,11 @@ export default function ArchiveTab() {
       setSupplementalSearchById(await upsertSupplementalSearchText(newId, visionText));
       posthog.capture("photo_uploaded");
       void loadItems();
+      void embedAndStoreImage({
+        memoryId: memoryRow.memory_id,
+        userId: user.id,
+        bytes: arrayBuffer,
+      });
     } catch {
       fail("Could not upload this file.");
     } finally {
