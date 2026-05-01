@@ -1,8 +1,11 @@
 import { sendChatMessage } from "@/lib/chat";
+import { exportChatTextToFile } from "@/lib/chatExport";
+import { saveChatOutput } from "@/lib/savedChatOutputs";
 import { Ionicons } from "@expo/vector-icons";
 import { useRef, useState } from "react";
 import {
   ActivityIndicator,
+  Alert,
   KeyboardAvoidingView,
   Modal,
   PanResponder,
@@ -15,7 +18,7 @@ import {
   View,
 } from "react-native";
 
-type ChatMessage = { role: "user" | "assistant"; text: string };
+type ChatMessage = { id: string; role: "user" | "assistant"; text: string };
 const MINI_CHAT_STARTER_PROMPTS = [
   "Create a bucket list for this weekend",
   "Draft a short weekend itinerary",
@@ -27,6 +30,7 @@ export function MiniChatWindow() {
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [savedMessageIds, setSavedMessageIds] = useState<Record<string, boolean>>({});
   const [chatHeight, setChatHeight] = useState(500);
   const scrollRef = useRef<ScrollView>(null);
   const startHeightRef = useRef(500);
@@ -59,14 +63,25 @@ export function MiniChatWindow() {
     if (!trimmed || sending) return;
     setInput("");
     setSending(true);
-    setMessages((m) => [...m, { role: "user", text: trimmed }]);
+    setMessages((m) => [
+      ...m,
+      { id: `user-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, role: "user", text: trimmed },
+    ]);
     try {
       const reply = await sendChatMessage(trimmed);
-      setMessages((m) => [...m, { role: "assistant", text: reply }]);
+      setMessages((m) => [
+        ...m,
+        {
+          id: `assistant-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+          role: "assistant",
+          text: reply,
+        },
+      ]);
     } catch (err) {
       setMessages((m) => [
         ...m,
         {
+          id: `assistant-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
           role: "assistant",
           text:
             err instanceof Error
@@ -152,7 +167,7 @@ export function MiniChatWindow() {
               ) : null}
               {messages.map((msg, i) => (
                 <View
-                  key={`${i}-${msg.role}`}
+                  key={msg.id}
                   className={`mb-2.5 max-w-[92%] rounded-2xl px-3.5 py-2.5 ${
                     msg.role === "user"
                       ? "self-end bg-[#0B0B0B]"
@@ -164,6 +179,50 @@ export function MiniChatWindow() {
                   >
                     {msg.text}
                   </Text>
+                  {msg.role === "assistant" ? (
+                    <View className="mt-2 flex-row justify-end">
+                      <View className="flex-row items-center gap-2">
+                        <Pressable
+                          accessibilityRole="button"
+                          accessibilityLabel="Download chat output"
+                          onPress={() => {
+                            void exportChatTextToFile(msg.text, msg.text)
+                              .then(() => Alert.alert("Download", "Use the share sheet to save this to Files."))
+                              .catch((err) =>
+                                Alert.alert(
+                                  "Download failed",
+                                  err instanceof Error ? err.message : "Could not export output."
+                                )
+                              );
+                          }}
+                          className="flex-row items-center gap-1 rounded-full border border-[#E6E1DA] bg-[#FFFCF8] px-2 py-1 active:opacity-80"
+                        >
+                          <Ionicons name="download-outline" size={12} color="#0B0B0B" />
+                          <Text className="text-[11px] font-semibold text-[#0B0B0B]">Download</Text>
+                        </Pressable>
+                        <Pressable
+                          accessibilityRole="button"
+                          accessibilityLabel="Save chat output"
+                          onPress={() => {
+                            void saveChatOutput(msg.text).then(() =>
+                              setSavedMessageIds((prev) => ({ ...prev, [msg.id]: true }))
+                            );
+                          }}
+                          disabled={Boolean(savedMessageIds[msg.id])}
+                          className="flex-row items-center gap-1 rounded-full border border-[#E6E1DA] bg-[#FFFCF8] px-2 py-1 active:opacity-80 disabled:opacity-60"
+                        >
+                          <Ionicons
+                            name={savedMessageIds[msg.id] ? "bookmark" : "bookmark-outline"}
+                            size={12}
+                            color="#0B0B0B"
+                          />
+                          <Text className="text-[11px] font-semibold text-[#0B0B0B]">
+                            {savedMessageIds[msg.id] ? "Saved" : "Save"}
+                          </Text>
+                        </Pressable>
+                      </View>
+                    </View>
+                  ) : null}
                 </View>
               ))}
               {sending ? (
