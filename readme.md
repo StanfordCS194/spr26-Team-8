@@ -37,31 +37,6 @@ This repo also contains a **React Native (Expo Router)** client under `app/`. It
    - `EXPO_PUBLIC_SUPABASE_ANON_KEY`
 4. `npm start`, then open in **Expo Go**, or press `i` / `a` / `w` for simulator / web.
 
-### iOS Simulator setup and app install
-
-Use this workflow to build and run the app in iOS Simulator for local testing (including share-flow sanity checks).
-
-1. Install Xcode (a version compatible with your macOS), then open it once to finish setup.
-2. Set active developer directory and accept the license:
-   - `sudo xcode-select -s "/Applications/Xcode.app/Contents/Developer"`
-   - `sudo xcodebuild -license accept`
-3. Install one iOS simulator runtime in Xcode:
-   - Xcode -> Settings -> Platforms -> download an iOS runtime (for example iOS 17.5).
-4. Build the simulator app with EAS:
-   - `npx eas-cli@latest build --platform ios --profile ios-simulator`
-5. Download/install the latest simulator build:
-   - `npx eas-cli@latest build:run --platform ios --latest`
-6. Boot a specific simulator device if needed:
-   - `xcrun simctl list devices available`
-   - `xcrun simctl boot "iPhone 15"`
-   - `open -a Simulator`
-7. Start Metro for a dev-client simulator build (run in a separate terminal):
-   - `npx expo start --dev-client`
-
-Notes:
-- `ios-simulator` builds install only on Simulator (not on physical iPhones).
-- If EAS says Xcode is missing, make sure `xcode-select -p` points to your Xcode app path (not only Command Line Tools).
-
 ### Library search (what it does right now)
 
 Search and light “clustering” for the **Library** tab (`app/(tabs)/archive.tsx`) live in `lib/archiveSearchAndCluster.ts`. Data is **on-device** unless teammates wire the integration hooks in `lib/teamIntegrationPlaceholders.ts`.
@@ -79,32 +54,3 @@ Search and light “clustering” for the **Library** tab (`app/(tabs)/archive.t
 | **Backend** | `lib/teamIntegrationPlaceholders.ts` defines no-op hooks for Supabase tags, embedding themes, index push, chat, and vision—flip flags and implement when ready. |
 
 The **Action** tab is a **placeholder** chat UI for future generative features; it does not use `chatbot_app.py`.
-
-### Share Sheet development and testing workflow
-
-Use this flow to build and test Share Sheet quickly when only one teammate has Apple Developer access.
-
-1. Make code changes on your branch and push to GitHub.
-2. Trigger an iOS internal (Ad Hoc) build:
-   `npx eas-cli@latest build --platform ios --profile preview`
-3. Apple-account teammate signs in when prompted and lets EAS manage credentials.
-4. Install the iOS build link on your iPhone and test share flow:
-   - Share an image from Photos to Venn
-   - Confirm app opens and pre-fills upload modal
-   - Confirm upload completes and image appears in Library
-5. Repeat build/install cycle for each testable change.
-
-#### Useful profiles in this repo
-
-- `development`: internal dev client build for real devices.
-- `preview`: internal Ad Hoc build for team QA on iPhones.
-- `production`: App Store/TestFlight-ready build profile.
-- `ios-simulator`: simulator-only iOS build (no real-device signing).
-
-#### Commands
-
-- Configure EAS project (first time): `npx eas-cli@latest build:configure`
-- iOS Ad Hoc internal build: `npx eas-cli@latest build --platform ios --profile preview`
-- Android internal build (APK): `npx eas-cli@latest build --platform android --profile preview`
-- iOS simulator build: `npx eas-cli@latest build --platform ios --profile ios-simulator`
-- Submit latest production iOS build: `npx eas-cli@latest submit --platform ios --latest`

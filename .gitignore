@@ -17,5 +17,3 @@ node_modules/
 .ipynb_checkpoints/
 __pycache__/
 CLAUDE.local.md
-ios/
-android/
