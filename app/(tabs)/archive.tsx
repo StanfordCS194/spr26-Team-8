@@ -13,6 +13,7 @@ import {
   removeSupplementalSearchText,
   upsertSupplementalSearchText,
 } from "@/lib/archiveSupplementalSearchText";
+import { extractTextTemporalSignals } from "@/lib/extractTemporalFromUserText";
 import { checkImageContext, moderateUpload } from "@/lib/moderation";
 import { fetchRemoteArchiveMeta, notifyArchiveIndexUpdated } from "@/lib/archiveBackendSync";
 import { fetchEmbeddingThemeOverrides } from "@/lib/embeddingThemes";
@@ -410,6 +411,18 @@ export default function ArchiveTab() {
         if (__DEV__ && intentErr && !isUndefinedColumnError(intentErr, "want_to_do")) {
           console.warn("[archive] could not save want_to_do:", intentErr.message);
         }
+      }
+
+      const textTemporal = extractTextTemporalSignals({
+        caption: caption.trim(),
+        want_to_do: wantToDoSaved || "",
+      });
+      const { error: temporalErr } = await supabase
+        .from("memories")
+        .update({ text_temporal: textTemporal })
+        .eq("memory_id", memoryRow.memory_id);
+      if (__DEV__ && temporalErr && !isUndefinedColumnError(temporalErr, "text_temporal")) {
+        console.warn("[archive] could not save text_temporal:", temporalErr.message);
       }
 
       const storagePath = `${user.id}/${memoryRow.memory_id}/${fileName}`;
