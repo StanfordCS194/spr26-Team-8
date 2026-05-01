@@ -10,7 +10,16 @@
     "newArchEnabled": true,
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.venn.app"
+      "bundleIdentifier": "com.venn.app",
+      "entitlements": {
+        "com.apple.security.application-groups": [
+          "group.com.venn.app",
+          "group.com.venn.app"
+        ]
+      },
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      }
     },
     "android": {
       "package": "com.venn.app",
@@ -61,7 +70,10 @@
           }
         }
       ],
-      "expo-sqlite"
+      "expo-sqlite",
+      "expo-font",
+      "expo-image",
+      "expo-web-browser"
     ],
     "experiments": {
       "typedRoutes": true,
@@ -89,6 +101,12 @@
         },
         "projectId": "a6ae85a1-c251-45d1-b68a-53ba1e05bda2"
       }
+    },
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "updates": {
+      "url": "https://u.expo.dev/a6ae85a1-c251-45d1-b68a-53ba1e05bda2"
     }
   }
 }
