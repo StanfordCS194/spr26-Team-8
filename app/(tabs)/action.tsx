@@ -1,6 +1,8 @@
 import { MarkdownishBoldLine } from "@/components/MarkdownishBoldLine";
+import { exportChatTextToFile } from "@/lib/chatExport";
 import { CHAT_PROMPTS, sendChatMessage } from "@/lib/chat";
 import { posthog } from "@/lib/posthog";
+import { saveChatOutput } from "@/lib/savedChatOutputs";
 import { Ionicons } from "@expo/vector-icons";
 import { useFocusEffect } from "@react-navigation/native";
 import { router, useLocalSearchParams } from "expo-router";
@@ -9,6 +11,7 @@ import { Image } from "expo-image";
 import * as ImagePicker from "expo-image-picker";
 import {
   ActivityIndicator,
+  Alert,
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -19,7 +22,7 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
-type ChatMessage = { role: "user" | "assistant"; text: string };
+type ChatMessage = { id: string; role: "user" | "assistant"; text: string };
 type SelectedImage = {
   uri: string;
   width?: number;
@@ -59,8 +62,18 @@ export default function ActionTab() {
   const [selectedImages, setSelectedImages] = useState<SelectedImage[]>([]);
   const [sending, setSending] = useState(false);
   const [showQuickActions, setShowQuickActions] = useState(true);
+  const [savedMessageIds, setSavedMessageIds] = useState<Record<string, boolean>>({});
   const scrollRef = useRef<ScrollView>(null);
   const chatSessionId = useRef(`chat-${Date.now()}`).current;
+
+  const makeMessage = useCallback(
+    (role: "user" | "assistant", text: string): ChatMessage => ({
+      id: `${role}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      role,
+      text,
+    }),
+    []
+  );
 
   const appendExchange = useCallback(
     async (userText: string, opts?: { silent?: boolean }) => {
@@ -70,7 +83,7 @@ export default function ActionTab() {
       setShowQuickActions(false);
       setSending(true);
       if (!silent) {
-        setMessages((m) => [...m, { role: "user", text: trimmed }]);
+        setMessages((m) => [...m, makeMessage("user", trimmed)]);
       }
       posthog.capture("chat_message_sent", {
         chat_session_id: chatSessionId,
@@ -81,24 +94,23 @@ export default function ActionTab() {
           trimmed,
           silent ? { style: "inbox_action_plan" } : undefined
         );
-        setMessages((m) => [...m, { role: "assistant", text: reply }]);
+        setMessages((m) => [...m, makeMessage("assistant", reply)]);
       } catch (err) {
         setMessages((m) => [
           ...m,
-          {
-            role: "assistant",
-            text:
-              err instanceof Error
-                ? `Sorry, I could not generate a response: ${err.message}`
-                : "Sorry, I could not generate a response right now.",
-          },
+          makeMessage(
+            "assistant",
+            err instanceof Error
+              ? `Sorry, I could not generate a response: ${err.message}`
+              : "Sorry, I could not generate a response right now."
+          ),
         ]);
       } finally {
         setSending(false);
         requestAnimationFrame(() => scrollRef.current?.scrollToEnd({ animated: true }));
       }
     },
-    [sending, chatSessionId]
+    [sending, chatSessionId, makeMessage]
   );
 
   useFocusEffect(
@@ -149,10 +161,7 @@ export default function ActionTab() {
     if (!permission.granted) {
       setMessages((m) => [
         ...m,
-        {
-          role: "assistant",
-          text: "Please allow photo library access to attach images.",
-        },
+        makeMessage("assistant", "Please allow photo library access to attach images."),
       ]);
       return;
     }
@@ -184,7 +193,7 @@ export default function ActionTab() {
         return true;
       });
     });
-  }, [sending]);
+  }, [sending, makeMessage]);
 
   return (
     <View className="flex-1 bg-[#F4F0EA]">
@@ -208,9 +217,9 @@ export default function ActionTab() {
                 scrollRef.current?.scrollToEnd({ animated: true })
               }
             >
-              {messages.map((msg, i) => (
+              {messages.map((msg) => (
                 <View
-                  key={`${i}-${msg.role}`}
+                  key={msg.id}
                   className={`mb-3 max-w-[92%] rounded-3xl px-4 py-3 ${
                     msg.role === "user"
                       ? "self-end bg-[#0B0B0B]"
@@ -220,7 +229,51 @@ export default function ActionTab() {
                   {msg.role === "user" ? (
                     <Text className="text-base leading-6 text-white">{msg.text}</Text>
                   ) : (
-                    <AssistantMessageBody content={msg.text} />
+                    <View>
+                      <AssistantMessageBody content={msg.text} />
+                      <View className="mt-2 flex-row justify-end">
+                        <View className="flex-row items-center gap-2">
+                          <Pressable
+                            accessibilityRole="button"
+                            accessibilityLabel="Download chat output"
+                            onPress={() => {
+                              void exportChatTextToFile(msg.text, msg.text)
+                                .then(() => Alert.alert("Download", "Use the share sheet to save this to Files."))
+                                .catch((err) =>
+                                  Alert.alert(
+                                    "Download failed",
+                                    err instanceof Error ? err.message : "Could not export output."
+                                  )
+                                );
+                            }}
+                            className="flex-row items-center gap-1 rounded-full border border-[#E6E1DA] bg-[#FFFCF8] px-2.5 py-1.5 active:opacity-80"
+                          >
+                            <Ionicons name="download-outline" size={14} color="#0B0B0B" />
+                            <Text className="text-xs font-semibold text-[#0B0B0B]">Download</Text>
+                          </Pressable>
+                          <Pressable
+                            accessibilityRole="button"
+                            accessibilityLabel="Save chat output"
+                            onPress={() => {
+                              void saveChatOutput(msg.text).then(() =>
+                                setSavedMessageIds((prev) => ({ ...prev, [msg.id]: true }))
+                              );
+                            }}
+                            disabled={Boolean(savedMessageIds[msg.id])}
+                            className="flex-row items-center gap-1 rounded-full border border-[#E6E1DA] bg-[#FFFCF8] px-2.5 py-1.5 active:opacity-80 disabled:opacity-60"
+                          >
+                            <Ionicons
+                              name={savedMessageIds[msg.id] ? "bookmark" : "bookmark-outline"}
+                              size={14}
+                              color="#0B0B0B"
+                            />
+                            <Text className="text-xs font-semibold text-[#0B0B0B]">
+                              {savedMessageIds[msg.id] ? "Saved" : "Save"}
+                            </Text>
+                          </Pressable>
+                        </View>
+                      </View>
+                    </View>
                   )}
                 </View>
               ))}
