@@ -44,6 +44,45 @@
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
-    }
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "build": {
+          "experimental": {
+            "ios": {
+              "appExtensions": [
+                {
+                  "targetName": "expo-sharing-extension",
+                  "bundleIdentifier": "com.venn.app.expo-sharing-extension",
+                  "entitlements": {
+                    "com.apple.security.application-groups": [
+                      "group.com.venn.app"
+                    ]
+                  }
+                },
+                {
+                  "targetName": "expo-sharing-extension",
+                  "bundleIdentifier": "com.venn.app.expo-sharing-extension",
+                  "entitlements": {
+                    "com.apple.security.application-groups": [
+                      "group.com.venn.app"
+                    ]
+                  }
+                }
+              ]
+            }
+          }
+        },
+        "projectId": "a6ae85a1-c251-45d1-b68a-53ba1e05bda2"
+      }
+    },
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "updates": {
+      "url": "https://u.expo.dev/a6ae85a1-c251-45d1-b68a-53ba1e05bda2"
+    },
+    "owner": "venn-cs194w"
   }
 }
