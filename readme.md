@@ -37,6 +37,31 @@ This repo also contains a **React Native (Expo Router)** client under `app/`. It
    - `EXPO_PUBLIC_SUPABASE_ANON_KEY`
 4. `npm start`, then open in **Expo Go**, or press `i` / `a` / `w` for simulator / web.
 
+### iOS Simulator setup and app install
+
+Use this workflow to build and run the app in iOS Simulator for local testing (including share-flow sanity checks).
+
+1. Install Xcode (a version compatible with your macOS), then open it once to finish setup.
+2. Set active developer directory and accept the license:
+   - `sudo xcode-select -s "/Applications/Xcode.app/Contents/Developer"`
+   - `sudo xcodebuild -license accept`
+3. Install one iOS simulator runtime in Xcode:
+   - Xcode -> Settings -> Platforms -> download an iOS runtime (for example iOS 17.5).
+4. Build the simulator app with EAS:
+   - `npx eas-cli@latest build --platform ios --profile ios-simulator`
+5. Download/install the latest simulator build:
+   - `npx eas-cli@latest build:run --platform ios --latest`
+6. Boot a specific simulator device if needed:
+   - `xcrun simctl list devices available`
+   - `xcrun simctl boot "iPhone 15"`
+   - `open -a Simulator`
+7. Start Metro for a dev-client simulator build (run in a separate terminal):
+   - `npx expo start --dev-client`
+
+Notes:
+- `ios-simulator` builds install only on Simulator (not on physical iPhones).
+- If EAS says Xcode is missing, make sure `xcode-select -p` points to your Xcode app path (not only Command Line Tools).
+
 ### Library search (what it does right now)
 
 Search and light “clustering” for the **Library** tab (`app/(tabs)/archive.tsx`) live in `lib/archiveSearchAndCluster.ts`. Data is **on-device** unless teammates wire the integration hooks in `lib/teamIntegrationPlaceholders.ts`.
