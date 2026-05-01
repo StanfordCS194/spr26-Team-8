@@ -489,7 +489,7 @@ export default function ArchiveTab() {
 
       let visionText: string;
       try {
-        visionText = await extractSearchableTextFromImage(asset.uri, {
+        visionText = await extractSearchableTextFromImage(uploadUri, {
           id: newId,
           fileName,
           mimeType: contentType,

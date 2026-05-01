@@ -15,6 +15,32 @@ export type VisionExtractContext = {
   mimeType: string;
 };
 
+type AnthropicMessagesResponse = {
+  content?: { text?: string }[];
+};
+
+type AnthropicErrorResponse = {
+  error?: {
+    message?: string;
+    type?: string;
+  };
+};
+
+function warnVisionExtractionSkipped(
+  message: string,
+  ctx: VisionExtractContext,
+) {
+  if (!__DEV__) return;
+  console.warn(
+    `[Vision] ${message}; upload continues without a generated description.`,
+    {
+      id: ctx.id,
+      fileName: ctx.fileName,
+      mimeType: ctx.mimeType,
+    },
+  );
+}
+
 export async function extractSearchableTextFromImage(
   localFileUri: string,
   ctx: VisionExtractContext,
@@ -22,60 +48,73 @@ export async function extractSearchableTextFromImage(
   if (!USE_VISION_TEXT_EXTRACTION) return "";
   const apiKey = process.env.EXPO_PUBLIC_ANTHROPIC_API_KEY?.trim();
   if (!apiKey) {
-    if (__DEV__) {
-      console.warn(
-        "[Vision] EXPO_PUBLIC_ANTHROPIC_API_KEY is not set; upload continues without a generated description. Add the key to .env to enable Claude Haiku image tagging (see .env.example)."
-      );
-    }
+    warnVisionExtractionSkipped("EXPO_PUBLIC_ANTHROPIC_API_KEY is not set", ctx);
     return "";
   }
 
-  // Resize to max 1568px and compress to stay under Anthropic's 5MB image limit
-  const resized = await ImageManipulator.manipulateAsync(
-    localFileUri,
-    [{ resize: { width: 1568 } }],
-    { compress: 0.8, format: ImageManipulator.SaveFormat.JPEG },
-  );
-  const base64 = await FileSystem.readAsStringAsync(resized.uri, {
-    encoding: FileSystem.EncodingType.Base64,
-  });
-  const res = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: {
-      "x-api-key": apiKey,
-      "anthropic-version": "2023-06-01",
-      "content-type": "application/json",
-    },
-    body: JSON.stringify({
-      model: "claude-haiku-4-5-20251001",
-      max_tokens: 512,
-      messages: [
-        {
-          role: "user",
-          content: [
-            {
-              type: "image",
-              source: {
-                type: "base64",
-                media_type: "image/jpeg",
-                data: base64,
+  try {
+    // Resize to max 1568px and compress to stay under Anthropic's 5MB image limit.
+    const resized = await ImageManipulator.manipulateAsync(
+      localFileUri,
+      [{ resize: { width: 1568 } }],
+      { compress: 0.8, format: ImageManipulator.SaveFormat.JPEG },
+    );
+    const base64 = await FileSystem.readAsStringAsync(resized.uri, {
+      encoding: FileSystem.EncodingType.Base64,
+    });
+    const res = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "x-api-key": apiKey,
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "claude-haiku-4-5-20251001",
+        max_tokens: 512,
+        messages: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "image",
+                source: {
+                  type: "base64",
+                  media_type: "image/jpeg",
+                  data: base64,
+                },
               },
-            },
-            {
-              type: "text",
-              text: "Return a comma separated list of tags and/or description of the image",
-            },
-          ],
-        },
-      ],
-    }),
-  });
-  if (!res.ok) {
-    const errBody = (await res.json().catch(() => ({}))) as { error?: { message?: string } };
-    throw new Error(`Vision API error ${res.status}: ${errBody.error?.message ?? "unknown error"}`);
+              {
+                type: "text",
+                text: "Return a comma separated list of tags and/or description of the image",
+              },
+            ],
+          },
+        ],
+      }),
+    });
+    if (!res.ok) {
+      const errBody = (await res.json().catch(() => ({}))) as AnthropicErrorResponse;
+      const requestId = res.headers.get("request-id");
+      const message = errBody.error?.message ?? "unknown error";
+      warnVisionExtractionSkipped(
+        `Claude image tagging HTTP ${res.status}: ${message}${requestId ? ` (request-id: ${requestId})` : ""}`,
+        ctx,
+      );
+      return "";
+    }
+    const json = (await res.json()) as AnthropicMessagesResponse;
+    const text = json.content?.[0]?.text;
+    if (!text) {
+      warnVisionExtractionSkipped("Claude image tagging returned no content", ctx);
+      return "";
+    }
+    return text;
+  } catch (err) {
+    warnVisionExtractionSkipped(
+      `Claude image tagging failed: ${err instanceof Error ? err.message : "unknown error"}`,
+      ctx,
+    );
+    return "";
   }
-  const json = (await res.json()) as { content?: { text?: string }[] };
-  const text = json.content?.[0]?.text;
-  if (!text) throw new Error("Vision API returned no content");
-  return text;
 }
