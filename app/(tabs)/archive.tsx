@@ -16,6 +16,7 @@ import {
 import { checkImageContext, moderateUpload } from "@/lib/moderation";
 import { fetchRemoteArchiveMeta, notifyArchiveIndexUpdated } from "@/lib/archiveBackendSync";
 import { fetchEmbeddingThemeOverrides } from "@/lib/embeddingThemes";
+import { MiniChatWindow } from "@/components/MiniChatWindow";
 import { getWeeklyNudgeEnabled, setWeeklyNudgeEnabled } from "@/lib/nudgePrefs";
 import { extractSearchableTextFromImage } from "@/lib/vision";
 import { posthog } from "@/lib/posthog";
@@ -661,15 +662,18 @@ export default function ArchiveTab() {
               <View className="flex-row items-center justify-between">
                 <Text className="text-sm font-medium text-[#5F5F5F]">Your saves</Text>
                 {!isSelecting ? (
-                  <View ref={settingsButtonRef} collapsable={false} className="rounded-full">
-                    <Pressable
-                      accessibilityLabel="Account and settings"
-                      onPress={openSettingsMenu}
-                      hitSlop={8}
-                      className="rounded-full p-1.5 active:bg-black/5"
-                    >
-                      <Ionicons name="settings-outline" size={24} color="#2C2C2C" />
-                    </Pressable>
+                  <View className="flex-row items-center gap-1">
+                    <MiniChatWindow />
+                    <View ref={settingsButtonRef} collapsable={false} className="rounded-full">
+                      <Pressable
+                        accessibilityLabel="Account and settings"
+                        onPress={openSettingsMenu}
+                        hitSlop={8}
+                        className="rounded-full p-1.5 active:bg-black/5"
+                      >
+                        <Ionicons name="settings-outline" size={24} color="#2C2C2C" />
+                      </Pressable>
+                    </View>
                   </View>
                 ) : null}
               </View>
