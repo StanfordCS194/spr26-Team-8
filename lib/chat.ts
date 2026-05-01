@@ -15,12 +15,7 @@ export const CHAT_PROMPTS = [
   "Draft a short weekend itinerary",
 ] as const;
 
-export type ChatResponseStyle = "default" | "inbox_action_plan";
-
-export async function sendChatMessage(
-  userText: string,
-  options?: { style?: ChatResponseStyle }
-): Promise<string> {
+export async function sendChatMessage(userText: string): Promise<string> {
   if (!USE_GENERATIVE_CHAT_API) {
     return `Echo: ${userText.trim() || "(empty)"}`;
   }
@@ -73,37 +68,11 @@ export async function sendChatMessage(
 
   void logChatMessage(userId, "user", userText);
 
-  const style = options?.style ?? "default";
-
-  const memoryDiscipline =
-    "Use the numbered memory snippets (want‑to intentions, captions, OCR) as grounding.\n" +
-    "Prefer concrete, real‑world actions. If snippets are sparse, say so briefly and still give practical defaults.";
-
-  const systemPromptDefault =
-    "You are a planning assistant embedded in Venn.\n" +
-    memoryDiscipline +
-    "\nWhen asked for a bucket list or itinerary, synthesize actionable ideas.";
-
-  const systemPromptInboxPlan =
-    "You’re replying to someone who tapped a tiny inbox nudge — they want you to do the thinking legwork.\n" +
-    memoryDiscipline +
-    "\n\nVoice: talk like a warm, slightly informal friend (use “you”, light contractions). " +
-    "No corporate tone, no “Happy to help!”, no AI disclaimer.\n\n" +
-    "Do the “research” for them in a honest way: infer the likely next moves (what to check, book, pack, message, budget for). " +
-    "When their memories name places/dates/gear, use them. " +
-    "If you don’t know live facts, don’t fake them — give 1–2 tight search phrases they can paste into Google/Maps " +
-    "(e.g. “Seljalandsfoss trail conditions May”) or name the *type* of site to check (park page, official hours, trail app). " +
-    "Never invent URLs.\n\n" +
-    "Length: roughly **280–420 characters** (~40–62 words); hard ceiling **520 characters**. Tight beats thorough.\n\n" +
-    "Format (conversation-shaped, easy to skim):\n" +
-    "- Line 1–2: reactive + the gist (“Yeah—if you’re doing X, I'd…”).\n" +
-    "- Then **3 bullets** (`• …`) each fragment-length (start with a verb).\n" +
-    "- Final line starts with Today: … (single concrete starter, ≤18 words).\n" +
-    "- If something essential is missing: add one tiny line: Small ask — … (?)\n\n" +
-    "Do NOT echo the invisible instruction/metadata block; only reply as the assistant.";
-
   const systemPrompt =
-    style === "inbox_action_plan" ? systemPromptInboxPlan : systemPromptDefault;
+    "You are a planning assistant for the user's saved memories.\n" +
+    "Ground your answer in ONLY the numbered memory snippets (want-to intentions, captions, OCR).\n" +
+    "When asked for a bucket list or itinerary, synthesize actionable ideas.\n" +
+    "If context is sparse, say so briefly and suggest they add captions or ‘I want to…’ when uploading.";
 
   const response = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
@@ -113,7 +82,7 @@ export async function sendChatMessage(
     },
     body: JSON.stringify({
       model: "gpt-4.1-mini",
-      temperature: style === "inbox_action_plan" ? 0.58 : 0.7,
+      temperature: 0.7,
       messages: [
         { role: "system", content: systemPrompt },
         {
