@@ -27,6 +27,7 @@ import { Ionicons } from "@expo/vector-icons";
 import * as FileSystem from "expo-file-system/legacy";
 import * as ImageManipulator from "expo-image-manipulator";
 import * as ImagePicker from "expo-image-picker";
+import { useIncomingShare } from "expo-sharing";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert,
@@ -131,6 +132,14 @@ export default function ArchiveTab() {
   const settingsButtonRef = useRef<View | null>(null);
   const insets = useSafeAreaInsets();
   const ACCOUNT_MENU_W = 208;
+  const { resolvedSharedPayloads, clearSharedPayloads, error: shareError, refreshSharePayloads } =
+    useIncomingShare();
+
+  const dismissUploadModal = useCallback(() => {
+    setPendingAsset(null);
+    setCaptionDraft("");
+    setIntentDraft("");
+  }, []);
 
   useEffect(() => {
     void loadSupplementalSearchText().then(setSupplementalSearchById);
@@ -140,6 +149,32 @@ export default function ArchiveTab() {
     if (!accountMenuOpen) return;
     void getWeeklyNudgeEnabled().then(setWeeklyNudgeEnabledState);
   }, [accountMenuOpen]);
+
+  useEffect(() => {
+    if (shareError) {
+      Alert.alert("Share", "Could not read incoming shared content.");
+    }
+  }, [shareError]);
+
+  useEffect(() => {
+    if (!resolvedSharedPayloads.length) return;
+
+    const sharedImageUris = resolvedSharedPayloads
+      .filter((payload) => payload.contentType === "image")
+      .map((payload) => payload.contentUri)
+      .filter((uri): uri is string => Boolean(uri));
+
+    if (!sharedImageUris.length) return;
+
+    const uri = sharedImageUris[0];
+    clearSharedPayloads();
+    void refreshSharePayloads();
+    setPendingAsset({
+      uri,
+      fileName: uri.split("/").pop() ?? `shared-${Date.now()}.jpg`,
+    } as ImagePicker.ImagePickerAsset);
+    setCaptionDraft("");
+  }, [clearSharedPayloads, refreshSharePayloads, resolvedSharedPayloads]);
 
   const loadItems = useCallback(async () => {
     const { data: { user } } = await supabase.auth.getUser();
@@ -975,21 +1010,10 @@ export default function ArchiveTab() {
           visible={!!pendingAsset}
           transparent
           animationType="slide"
-          onRequestClose={() => {
-            setPendingAsset(null);
-            setCaptionDraft("");
-            setIntentDraft("");
-          }}
+          onRequestClose={dismissUploadModal}
         >
           <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} className="flex-1">
-            <Pressable
-              className="flex-1"
-              onPress={() => {
-                setPendingAsset(null);
-                setCaptionDraft("");
-                setIntentDraft("");
-              }}
-            />
+            <Pressable className="flex-1" onPress={dismissUploadModal} />
             <View className="rounded-t-3xl border-t border-gray-200 bg-white px-5 pb-10 pt-5">
               {pendingAsset ? (
                 <Image
@@ -1046,11 +1070,7 @@ export default function ArchiveTab() {
               </View>
               <View className="flex-row gap-3">
                 <Pressable
-                  onPress={() => {
-                    setPendingAsset(null);
-                    setCaptionDraft("");
-                    setIntentDraft("");
-                  }}
+                  onPress={dismissUploadModal}
                   className="flex-1 items-center rounded-2xl border border-gray-200 py-4 active:opacity-70"
                 >
                   <Text className="text-base font-black text-gray-700">Cancel</Text>
