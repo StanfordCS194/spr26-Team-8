@@ -3,18 +3,24 @@ import {
   archiveIndexForBackend,
   distinctThemes,
   enrichArchiveRows,
-  fileNameFromArchiveId,
   hydrateArchiveMeta,
   mergeArchiveMeta,
   searchAndRankArchiveRows,
 } from "@/lib/archiveSearchAndCluster";
-import { loadSupplementalSearchText, removeSupplementalSearchText, upsertSupplementalSearchText } from "@/lib/archiveSupplementalSearchText";
+import {
+  loadSupplementalSearchText,
+  mergeSupplementalStrings,
+  removeSupplementalSearchText,
+  upsertSupplementalSearchText,
+} from "@/lib/archiveSupplementalSearchText";
 import { checkImageContext, moderateUpload } from "@/lib/moderation";
 import { fetchRemoteArchiveMeta, notifyArchiveIndexUpdated } from "@/lib/archiveBackendSync";
 import { fetchEmbeddingThemeOverrides } from "@/lib/embeddingThemes";
+import { getWeeklyNudgeEnabled, setWeeklyNudgeEnabled } from "@/lib/nudgePrefs";
 import { extractSearchableTextFromImage } from "@/lib/vision";
 import { posthog } from "@/lib/posthog";
 import { supabase } from "@/lib/supabase";
+import { isUndefinedColumnError } from "@/lib/supabaseSchema";
 import { useFocusEffect } from "@react-navigation/native";
 import { decode } from "base64-arraybuffer";
 import { Ionicons } from "@expo/vector-icons";
@@ -36,6 +42,7 @@ import {
   RefreshControl,
   ScrollView,
   StyleSheet,
+  Switch,
   Text,
   TextInput,
   useWindowDimensions,
@@ -49,6 +56,10 @@ type BoardItem = {
   id: string;
   source: ImageSourcePropType;
   height: number;
+  /** From `files.file_name` — used for tag/theme inference and keyword search (not raw memory UUID). */
+  searchFileName: string;
+  /** From `memories.ocr_description` + `user_caption`; merged with local supplemental OCR cache. */
+  serverSearchText: string;
 };
 
 type GridCell = {
@@ -57,7 +68,13 @@ type GridCell = {
 
 type MemoryFileRow = {
   memory_id: string;
-  files: { storage_path: string } | { storage_path: string }[] | null;
+  want_to_do?: string | null;
+  ocr_description: string | null;
+  user_caption: string | null;
+  files:
+    | { storage_path: string; file_name: string }
+    | { storage_path: string; file_name: string }[]
+    | null;
 };
 
 const isJpegAsset = (mimeType?: string | null, fileName?: string | null) => {
@@ -96,6 +113,8 @@ export default function ArchiveTab() {
   const [selectedItem, setSelectedItem] = useState<BoardItem | null>(null);
   const [pendingAsset, setPendingAsset] = useState<ImagePicker.ImagePickerAsset | null>(null);
   const [captionDraft, setCaptionDraft] = useState("");
+  const [intentDraft, setIntentDraft] = useState("");
+  const [weeklyNudgeEnabled, setWeeklyNudgeEnabledState] = useState(true);
   const [isUploading, setIsUploading] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [isBulkDeleting, setIsBulkDeleting] = useState(false);
@@ -119,11 +138,17 @@ export default function ArchiveTab() {
   const dismissUploadModal = useCallback(() => {
     setPendingAsset(null);
     setCaptionDraft("");
+    setIntentDraft("");
   }, []);
 
   useEffect(() => {
     void loadSupplementalSearchText().then(setSupplementalSearchById);
   }, []);
+
+  useEffect(() => {
+    if (!accountMenuOpen) return;
+    void getWeeklyNudgeEnabled().then(setWeeklyNudgeEnabledState);
+  }, [accountMenuOpen]);
 
   useEffect(() => {
     if (shareError) {
@@ -155,16 +180,49 @@ export default function ArchiveTab() {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return setItems([]);
 
-    const { data } = await supabase
+    const SEL_FULL =
+      "memory_id, want_to_do, ocr_description, user_caption, files(storage_path, file_name)";
+    const SEL_LEGACY =
+      "memory_id, ocr_description, user_caption, files(storage_path, file_name)";
+
+    let rowsRes = await supabase
       .from("memories")
-      .select("memory_id, files(storage_path)")
+      .select(SEL_FULL)
       .eq("user_id", user.id)
       .not("file_id", "is", null)
       .order("memory_id", { ascending: true });
 
+    if (rowsRes.error && isUndefinedColumnError(rowsRes.error, "want_to_do")) {
+      rowsRes = await supabase
+        .from("memories")
+        .select(SEL_LEGACY)
+        .eq("user_id", user.id)
+        .not("file_id", "is", null)
+        .order("memory_id", { ascending: true });
+    }
+
+    if (rowsRes.error) {
+      if (__DEV__) console.warn("[archive] memories load:", rowsRes.error.message);
+      return setItems([]);
+    }
+
+    const data = rowsRes.data;
+
     const entries = ((data as MemoryFileRow[] | null) ?? []).flatMap((m) => {
       const file = Array.isArray(m.files) ? m.files[0] : m.files;
-      return file ? [{ memory_id: m.memory_id, storage_path: file.storage_path }] : [];
+      if (!file) return [];
+      const want = m.want_to_do?.trim() ?? "";
+      const ocr = m.ocr_description?.trim() ?? "";
+      const cap = m.user_caption?.trim() ?? "";
+      const serverSearchText = [want, ocr, cap].filter(Boolean).join(" ");
+      return [
+        {
+          memory_id: m.memory_id,
+          storage_path: file.storage_path,
+          searchFileName: file.file_name,
+          serverSearchText,
+        },
+      ];
     });
     if (entries.length === 0) return setItems([]);
 
@@ -181,6 +239,8 @@ export default function ArchiveTab() {
               id: `uploaded-${entries[i].memory_id}`,
               source: { uri: s.signedUrl },
               height: imageHeights[i % imageHeights.length],
+              searchFileName: entries[i].searchFileName,
+              serverSearchText: entries[i].serverSearchText,
             }]
           : []
       )
@@ -214,7 +274,7 @@ export default function ArchiveTab() {
   useEffect(() => {
     const ids = items.map((item) => ({
       id: item.id,
-      fileName: fileNameFromArchiveId(item.id),
+      fileName: item.searchFileName,
     }));
 
     let cancelled = false;
@@ -233,14 +293,20 @@ export default function ArchiveTab() {
     };
   }, [items]);
 
-  const indexRows = useMemo(
-    () =>
-      enrichArchiveRows(items.map((b) => b.id), meta, {
-        themeOverrides,
-        searchableTextById: supplementalSearchById,
-      }),
-    [items, meta, themeOverrides, supplementalSearchById]
-  );
+  const indexRows = useMemo(() => {
+    const fileNameById = Object.fromEntries(items.map((b) => [b.id, b.searchFileName]));
+    const searchableTextById: Record<string, string> = { ...supplementalSearchById };
+    for (const item of items) {
+      const server = item.serverSearchText.trim();
+      if (!server) continue;
+      searchableTextById[item.id] = mergeSupplementalStrings(searchableTextById[item.id], server);
+    }
+    return enrichArchiveRows(items.map((b) => b.id), meta, {
+      themeOverrides,
+      fileNameById,
+      searchableTextById,
+    });
+  }, [items, meta, themeOverrides, supplementalSearchById]);
 
   const indexPayload = useMemo(() => archiveIndexForBackend(indexRows), [indexRows]);
 
@@ -293,8 +359,10 @@ export default function ArchiveTab() {
   const handleConfirmUpload = async (caption: string) => {
     if (!pendingAsset) return;
     const asset = pendingAsset;
+    const wantToDoSaved = intentDraft.trim();
     setPendingAsset(null);
     setCaptionDraft("");
+    setIntentDraft("");
     setIsUploading(true);
 
     const fail = (msg: string) => Alert.alert("Upload", msg);
@@ -338,10 +406,11 @@ export default function ArchiveTab() {
       });
       const arrayBuffer = decode(base64);
 
+      const moderationCaption = [caption.trim(), wantToDoSaved].filter(Boolean).join("\n\n");
       const moderation = await moderateUpload({
         base64,
         mimeType: contentType,
-        caption: caption.trim() || undefined,
+        caption: moderationCaption || undefined,
       });
       if (!moderation.allowed) {
         return fail(`This upload was blocked by content moderation (${moderation.reason}).`);
@@ -355,12 +424,28 @@ export default function ArchiveTab() {
         return fail(`This image doesn't look like a memory worth saving (${context.reason}). Try another photo.`);
       }
 
-      const { data: memoryRow } = await supabase
+      const { data: memoryRow, error: insertMemErr } = await supabase
         .from("memories")
-        .insert({ user_id: user.id, source: "camera_roll", user_caption: caption.trim() || null })
+        .insert({
+          user_id: user.id,
+          source: "camera_roll",
+          user_caption: caption.trim() || null,
+        })
         .select("memory_id")
         .single();
-      if (!memoryRow) return fail("Could not create memory record.");
+      if (insertMemErr || !memoryRow) {
+        return fail(insertMemErr?.message ?? "Could not create memory record.");
+      }
+
+      if (wantToDoSaved) {
+        const { error: intentErr } = await supabase
+          .from("memories")
+          .update({ want_to_do: wantToDoSaved })
+          .eq("memory_id", memoryRow.memory_id);
+        if (__DEV__ && intentErr && !isUndefinedColumnError(intentErr, "want_to_do")) {
+          console.warn("[archive] could not save want_to_do:", intentErr.message);
+        }
+      }
 
       const storagePath = `${user.id}/${memoryRow.memory_id}/${fileName}`;
       const cleanupMemory = () =>
@@ -604,7 +689,7 @@ export default function ArchiveTab() {
 
   return (
     <View className="flex-1 bg-[#F4F0EA]">
-      <SafeAreaView className="flex-1 bg-[#F4F0EA]" edges={["top", "left", "right"]}>
+      <SafeAreaView className="flex-1 bg-[#F4F0EA]" edges={["left", "right"]}>
         <View className="flex-1">
           <View className="px-5">
             <View className="pt-1.5">
@@ -890,6 +975,21 @@ export default function ArchiveTab() {
                   <Text className="border-b border-[#E6E1DA] px-3 py-1.5 text-xs font-semibold uppercase tracking-wider text-[#6B6B6B]">
                     Account
                   </Text>
+                  <View className="flex-row items-center justify-between border-b border-[#E6E1DA] px-3 py-2.5">
+                    <Text className="shrink pr-3 text-sm font-medium text-[#0B0B0B]" numberOfLines={2}>
+                      Weekly nudges
+                    </Text>
+                    <Switch
+                      value={weeklyNudgeEnabled}
+                      onValueChange={(v) => {
+                        setWeeklyNudgeEnabledState(v);
+                        void setWeeklyNudgeEnabled(v);
+                      }}
+                      trackColor={{ false: "#E6E1DA", true: "#0B7AEE" }}
+                      thumbColor="#FFFFFF"
+                      accessibilityLabel="Weekly nudges"
+                    />
+                  </View>
                   <Pressable
                     className="px-3 py-2.5 active:bg-[#F4F0EA]"
                     onPress={() => {
@@ -936,6 +1036,30 @@ export default function ArchiveTab() {
                   textAlignVertical="top"
                   style={{
                     minHeight: 80,
+                    paddingTop: 0,
+                    paddingBottom: 0,
+                    lineHeight: 22,
+                    fontSize: 16,
+                    color: "#0B0B0B",
+                  }}
+                />
+              </View>
+              <Text className="mb-2 text-base font-black text-black">I want to…</Text>
+              <Text className="mb-2 text-xs leading-5 text-[#6B6B6B]">
+                Optional — habits, trips, or tasks you asked Venn to remember for weekly recap.
+              </Text>
+              <View className="mb-4 rounded-2xl border border-gray-200 px-4 pb-3 pt-2">
+                <TextInput
+                  value={intentDraft}
+                  onChangeText={setIntentDraft}
+                  placeholder="e.g. Try that ramen spot on Saturday…"
+                  placeholderTextColor="#9CA3AF"
+                  className="text-base text-black"
+                  multiline
+                  numberOfLines={3}
+                  textAlignVertical="top"
+                  style={{
+                    minHeight: 64,
                     paddingTop: 0,
                     paddingBottom: 0,
                     lineHeight: 22,
