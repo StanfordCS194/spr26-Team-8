@@ -26,6 +26,7 @@ import { isUndefinedColumnError } from "@/lib/supabaseSchema";
 import { useFocusEffect } from "@react-navigation/native";
 import { decode } from "base64-arraybuffer";
 import { Ionicons } from "@expo/vector-icons";
+import { useLocalSearchParams, useRouter } from "expo-router";
 import * as FileSystem from "expo-file-system/legacy";
 import * as ImageManipulator from "expo-image-manipulator";
 import * as ImagePicker from "expo-image-picker";
@@ -78,6 +79,12 @@ type MemoryFileRow = {
     | null;
 };
 
+type UploadAsset = {
+  uri: string;
+  fileName?: string | null;
+  mimeType?: string | null;
+};
+
 const isJpegAsset = (mimeType?: string | null, fileName?: string | null) => {
   const mime = (mimeType ?? "").toLowerCase();
   const name = (fileName ?? "").toLowerCase();
@@ -105,6 +112,12 @@ const searchInputStyles = StyleSheet.create({
 });
 
 export default function ArchiveTab() {
+  const router = useRouter();
+  const { sharedImageUri, sharedImageName, sharedImageMime } = useLocalSearchParams<{
+    sharedImageUri?: string;
+    sharedImageName?: string;
+    sharedImageMime?: string;
+  }>();
   const [items, setItems] = useState<BoardItem[]>([]);
   const [meta, setMeta] = useState<Record<string, ArchiveItemMeta>>({});
   const [themeOverrides, setThemeOverrides] = useState<Record<string, string>>({});
@@ -112,7 +125,7 @@ export default function ArchiveTab() {
   const [themeFilter, setThemeFilter] = useState<"all" | string>("all");
   const [supplementalSearchById, setSupplementalSearchById] = useState<Record<string, string>>({});
   const [selectedItem, setSelectedItem] = useState<BoardItem | null>(null);
-  const [pendingAsset, setPendingAsset] = useState<ImagePicker.ImagePickerAsset | null>(null);
+  const [pendingAsset, setPendingAsset] = useState<UploadAsset | null>(null);
   const [captionDraft, setCaptionDraft] = useState("");
   const [intentDraft, setIntentDraft] = useState("");
   const [weeklyNudgeEnabled, setWeeklyNudgeEnabledState] = useState(true);
@@ -142,6 +155,16 @@ export default function ArchiveTab() {
     if (!accountMenuOpen) return;
     void getWeeklyNudgeEnabled().then(setWeeklyNudgeEnabledState);
   }, [accountMenuOpen]);
+
+  useEffect(() => {
+    if (typeof sharedImageUri !== "string" || !sharedImageUri.trim()) return;
+    setPendingAsset({
+      uri: sharedImageUri,
+      fileName: typeof sharedImageName === "string" ? sharedImageName : undefined,
+      mimeType: typeof sharedImageMime === "string" ? sharedImageMime : undefined,
+    });
+    router.replace("/(tabs)/archive");
+  }, [router, sharedImageMime, sharedImageName, sharedImageUri]);
 
   const loadItems = useCallback(async () => {
     const { data: { user } } = await supabase.auth.getUser();
@@ -317,7 +340,12 @@ export default function ArchiveTab() {
         quality: 1,
       });
       if (picked.canceled || !picked.assets.length) return;
-      setPendingAsset(picked.assets[0]);
+      const selected = picked.assets[0];
+      setPendingAsset({
+        uri: selected.uri,
+        fileName: selected.fileName,
+        mimeType: selected.mimeType,
+      });
     } catch {
       fail("Could not open photo library.");
     }
