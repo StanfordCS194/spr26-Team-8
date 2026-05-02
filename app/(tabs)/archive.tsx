@@ -23,20 +23,24 @@ import { extractSearchableTextFromImage } from "@/lib/vision";
 import { posthog } from "@/lib/posthog";
 import { supabase } from "@/lib/supabase";
 import { isUndefinedColumnError } from "@/lib/supabaseSchema";
+import {
+  type CachedSignedUrl,
+  clearSignedUrlCache,
+  loadSignedUrlCache,
+  saveSignedUrlCache,
+} from "@/lib/archiveSignedUrlCache";
 import { useFocusEffect } from "@react-navigation/native";
 import { decode } from "base64-arraybuffer";
 import { Ionicons } from "@expo/vector-icons";
 import * as FileSystem from "expo-file-system/legacy";
+// using expo-image so photos actually cache on disk between launches
+import { Image } from "expo-image";
 import * as ImageManipulator from "expo-image-manipulator";
 import * as ImagePicker from "expo-image-picker";
 import { useIncomingShare } from "expo-sharing";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert,
-  AppState,
-  type AppStateStatus,
-  Image,
-  type ImageSourcePropType,
   KeyboardAvoidingView,
   Modal,
   Platform,
@@ -56,7 +60,8 @@ const imageHeights = [220, 280, 200, 260];
 
 type BoardItem = {
   id: string;
-  source: ImageSourcePropType;
+  // always a Supabase signed URL
+  source: { uri: string };
   height: number;
   /** From `files.file_name` — used for tag/theme inference and keyword search (not raw memory UUID). */
   searchFileName: string;
@@ -83,6 +88,9 @@ type UploadAsset = {
   uri: string;
   fileName?: string | null;
   mimeType?: string | null;
+  // dimensions only come through the image picker, not the share sheet
+  width?: number | null;
+  height?: number | null;
 };
 
 const isJpegAsset = (mimeType?: string | null, fileName?: string | null) => {
@@ -143,6 +151,13 @@ export default function ArchiveTab() {
   const { resolvedSharedPayloads, clearSharedPayloads, error: shareError, refreshSharePayloads } =
     useIncomingShare();
 
+  // hold onto signed URLs so the URL string stays the same across reloads. that's what lets the disk cache hit
+  const signedUrlCacheRef = useRef<Map<string, CachedSignedUrl>>(new Map());
+  // remember which user this cache belongs to, so we re-hydrate from disk when the user changes
+  const cachedUserIdRef = useRef<string | null>(null);
+  // when we last loaded. used to skip redundant reloads
+  const lastLoadAtRef = useRef<number>(0);
+
   useEffect(() => {
     void loadSupplementalSearchText().then(setSupplementalSearchById);
   }, []);
@@ -184,6 +199,12 @@ export default function ArchiveTab() {
   const loadItems = useCallback(async () => {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return setItems([]);
+
+    // first time we see this user this session, pull their saved URL cache off disk so cold starts can hit the cache
+    if (cachedUserIdRef.current !== user.id) {
+      signedUrlCacheRef.current = await loadSignedUrlCache(user.id);
+      cachedUserIdRef.current = user.id;
+    }
 
     const SEL_FULL =
       "memory_id, want_to_do, ocr_description, user_caption, files(storage_path, file_name)";
@@ -232,50 +253,93 @@ export default function ArchiveTab() {
     });
     if (entries.length === 0) return setItems([]);
 
-    /** Shorter than 1h caused images to “disappear” (blank) after the URL expired. */
+    // long TTL. anything shorter and images vanish when the URL expires mid-session
     const SIGNED_URL_TTL_SEC = 60 * 60 * 24 * 7;
-    const { data: signed } = await supabase.storage
-      .from("memories")
-      .createSignedUrls(entries.map((e) => e.storage_path), SIGNED_URL_TTL_SEC);
+    // only refresh URLs that are about to expire. keeps strings stable so the cache hits
+    const REFRESH_THRESHOLD_MS = 24 * 60 * 60 * 1000;
+
+    const now = Date.now();
+    const pathsNeedingSignedUrl: string[] = [];
+    for (const e of entries) {
+      const cached = signedUrlCacheRef.current.get(e.storage_path);
+      if (!cached || cached.expiresAt - now < REFRESH_THRESHOLD_MS) {
+        pathsNeedingSignedUrl.push(e.storage_path);
+      }
+    }
+
+    let cacheChanged = false;
+    if (pathsNeedingSignedUrl.length > 0) {
+      const { data: signed } = await supabase.storage
+        .from("memories")
+        .createSignedUrls(pathsNeedingSignedUrl, SIGNED_URL_TTL_SEC);
+      const expiresAt = now + SIGNED_URL_TTL_SEC * 1000;
+      for (const s of signed ?? []) {
+        if (s.signedUrl && s.path) {
+          signedUrlCacheRef.current.set(s.path, { url: s.signedUrl, expiresAt });
+          cacheChanged = true;
+        }
+      }
+    }
 
     setItems(
-      (signed ?? []).flatMap((s, i) =>
-        s.signedUrl
-          ? [{
-              id: `uploaded-${entries[i].memory_id}`,
-              source: { uri: s.signedUrl },
-              height: imageHeights[i % imageHeights.length],
-              searchFileName: entries[i].searchFileName,
-              serverSearchText: entries[i].serverSearchText,
-            }]
-          : []
-      )
+      entries.flatMap((e, i) => {
+        const cached = signedUrlCacheRef.current.get(e.storage_path);
+        if (!cached) return [];
+        return [
+          {
+            id: `uploaded-${e.memory_id}`,
+            source: { uri: cached.url },
+            height: imageHeights[i % imageHeights.length],
+            searchFileName: e.searchFileName,
+            serverSearchText: e.serverSearchText,
+          },
+        ];
+      })
     );
+
+    // persist new URLs to disk so the next cold start can reuse them
+    if (cacheChanged) void saveSignedUrlCache(user.id, signedUrlCacheRef.current);
   }, []);
 
-  useEffect(() => {
-    const { data } = supabase.auth.onAuthStateChange((event) => {
-      if (event === "SIGNED_IN" || event === "SIGNED_OUT" || event === "USER_UPDATED") {
-        void loadItems();
+  // skip the reload if we just did one. pass force=true to override (pull-to-refresh, sign-in)
+  const loadItemsIfStale = useCallback(
+    async (opts?: { force?: boolean }) => {
+      const STALE_MS = 5 * 60 * 1000;
+      const now = Date.now();
+      if (!opts?.force && lastLoadAtRef.current && now - lastLoadAtRef.current < STALE_MS) {
+        return;
       }
-    });
-    return () => data.subscription.unsubscribe();
-  }, [loadItems]);
-
-  /** Refresh file URLs and DB state when returning to this tab (signed URLs are time-limited). */
-  useFocusEffect(
-    useCallback(() => {
-      void loadItems();
-    }, [loadItems])
+      // claim early so two simultaneous calls don't both run
+      lastLoadAtRef.current = now;
+      await loadItems();
+    },
+    [loadItems]
   );
 
   useEffect(() => {
-    const onChange = (state: AppStateStatus) => {
-      if (state === "active") void loadItems();
-    };
-    const sub = AppState.addEventListener("change", onChange);
-    return () => sub.remove();
-  }, [loadItems]);
+    // ignore USER_UPDATED, it fires on every token refresh and was eating egress
+    const { data } = supabase.auth.onAuthStateChange((event) => {
+      if (event === "SIGNED_IN" || event === "SIGNED_OUT") {
+        // wipe the cache so we don't leak the previous user's signed URLs
+        const previousUserId = cachedUserIdRef.current;
+        signedUrlCacheRef.current.clear();
+        cachedUserIdRef.current = null;
+        lastLoadAtRef.current = 0;
+        if (previousUserId) void clearSignedUrlCache(previousUserId);
+        void loadItemsIfStale({ force: true });
+      }
+    });
+    return () => data.subscription.unsubscribe();
+  }, [loadItemsIfStale]);
+
+  // reload when the tab gets focus, but only if we haven't loaded recently
+  useFocusEffect(
+    useCallback(() => {
+      void loadItemsIfStale();
+    }, [loadItemsIfStale])
+  );
+
+  // no AppState listener. used to re-download every photo on every app foreground
 
   useEffect(() => {
     const ids = items.map((item) => ({
@@ -361,6 +425,8 @@ export default function ArchiveTab() {
         uri: selected.uri,
         fileName: selected.fileName,
         mimeType: selected.mimeType,
+        width: selected.width,
+        height: selected.height,
       });
     } catch {
       fail("Could not open photo library.");
@@ -382,22 +448,50 @@ export default function ArchiveTab() {
       const sanitizedBaseName = rawName
         .replace(/[^\w.\-]/g, "_")
         .replace(/\.(heic|heif|png|jpg|jpeg)$/i, "");
-      let fileName = `${Date.now()}-${rawName.replace(/[^\w.\-]/g, "_")}`;
-      let contentType = "image/jpeg";
-      let uploadUri = asset.uri;
+      const wasJpeg = isJpegAsset(asset.mimeType, rawName);
+      // keep the original extension when we can so dedup against older uploads still matches
+      const fileName = wasJpeg
+        ? `${Date.now()}-${rawName.replace(/[^\w.\-]/g, "_")}`
+        : `${Date.now()}-${sanitizedBaseName}.jpeg`;
+      const contentType = "image/jpeg";
 
-      if (!isJpegAsset(asset.mimeType, rawName)) {
-        const converted = await ImageManipulator.manipulateAsync(
-          asset.uri,
-          [],
-          { compress: 1, format: ImageManipulator.SaveFormat.JPEG }
-        );
-        uploadUri = converted.uri;
-        fileName = `${Date.now()}-${sanitizedBaseName}.jpeg`;
+      // shrink huge phone photos and recompress so we're not storing 4MB JPEGs
+      const TARGET_LONGEST_PX = 1920;
+      const longestDim = Math.max(asset.width || 0, asset.height || 0);
+      const actions: ImageManipulator.Action[] = [];
+      if (asset.width && asset.height && longestDim > TARGET_LONGEST_PX) {
+        // scale so the longest side is TARGET_LONGEST_PX, aspect ratio preserved
+        const scale = TARGET_LONGEST_PX / longestDim;
+        actions.push({
+          resize: {
+            width: Math.round(asset.width * scale),
+            height: Math.round(asset.height * scale),
+          },
+        });
       }
+      const processed = await ImageManipulator.manipulateAsync(
+        asset.uri,
+        actions,
+        { compress: 0.7, format: ImageManipulator.SaveFormat.JPEG }
+      );
+      const uploadUri = processed.uri;
 
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return fail("Could not identify the current user.");
+
+      // skip the upload entirely if we've already got this filename for this user
+      if (asset.fileName) {
+        const sanitizedName = wasJpeg
+          ? asset.fileName.replace(/[^\w.\-]/g, "_")
+          : `${sanitizedBaseName}.jpeg`;
+        const { data: existing } = await supabase
+          .from("files")
+          .select("file_id")
+          .eq("user_id", user.id)
+          .ilike("file_name", `%-${sanitizedName}`)
+          .limit(1);
+        if (existing && existing.length > 0) return fail("This photo has already been uploaded.");
+      }
 
       const base64 = await FileSystem.readAsStringAsync(uploadUri, {
         encoding: FileSystem.EncodingType.Base64,
@@ -698,7 +792,10 @@ export default function ArchiveTab() {
           <Image
             source={item.source}
             style={{ width: "100%", height: item.height }}
-            resizeMode="cover"
+            contentFit="cover"
+            // keep in RAM for the session and on disk between launches
+            cachePolicy="memory-disk"
+            transition={150}
           />
           {isSelecting ? (
             <View className="absolute right-2 top-2 h-7 w-7 items-center justify-center rounded-full border-2 border-white bg-black/35">
@@ -807,7 +904,10 @@ export default function ArchiveTab() {
                 refreshing={isRefreshing}
                 onRefresh={() => {
                   setIsRefreshing(true);
-                  void loadItems().finally(() => setIsRefreshing(false));
+                  // pull-to-refresh, always actually refetch
+                  void loadItemsIfStale({ force: true }).finally(() =>
+                    setIsRefreshing(false)
+                  );
                 }}
               />
             }
@@ -948,7 +1048,9 @@ export default function ArchiveTab() {
                     <Image
                       source={selectedItem.source}
                       style={{ width: "100%", height: "100%" }}
-                      resizeMode="contain"
+                      contentFit="contain"
+                      // already cached from the grid view, so this opens instantly
+                      cachePolicy="memory-disk"
                     />
                     <Pressable
                       accessibilityLabel="Close"
@@ -1070,7 +1172,7 @@ export default function ArchiveTab() {
                 <Image
                   source={{ uri: pendingAsset.uri }}
                   style={{ width: "100%", height: 120, borderRadius: 12, marginBottom: 16 }}
-                  resizeMode="cover"
+                  contentFit="cover"
                 />
               ) : null}
               <Text className="mb-2 text-base font-black text-black">Add a caption</Text>
