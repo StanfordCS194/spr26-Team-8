@@ -419,13 +419,12 @@ export default function ArchiveTab() {
           .select("memory_id")
           .single();
 
-      let temporalSavedOnInsert = false;
       let ins = await insertWithTemporal();
-      if (ins.error && isUndefinedColumnError(ins.error, "text_temporal")) {
+      const temporalInsertSucceeded = Boolean(!ins.error && ins.data);
+      if (ins.error) {
         ins = await insertMinimal();
-      } else if (!ins.error) {
-        temporalSavedOnInsert = true;
       }
+      const temporalSavedOnInsert = temporalInsertSucceeded;
 
       const memoryRow = ins.data;
       const insertMemErr = ins.error;
