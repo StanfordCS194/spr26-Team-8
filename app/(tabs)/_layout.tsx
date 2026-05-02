@@ -1,37 +1,12 @@
 import { useAuth } from "@/lib/auth";
 import { venn } from "@/lib/vennTheme";
 import { Ionicons } from "@expo/vector-icons";
-import { useShareIntentContext } from "expo-share-intent";
-import { Redirect, Tabs, useRouter } from "expo-router";
-import { useEffect } from "react";
+import { Redirect, Tabs } from "expo-router";
 import { ActivityIndicator, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 export default function TabsLayout() {
   const { session, isLoading } = useAuth();
-  const router = useRouter();
-  const { hasShareIntent, shareIntent, resetShareIntent } = useShareIntentContext();
-
-  useEffect(() => {
-    if (!session || !hasShareIntent) return;
-    const sharedImage = shareIntent.files?.find(
-      (file) => file.path && typeof file.mimeType === "string" && file.mimeType.startsWith("image/")
-    );
-    if (!sharedImage?.path) {
-      resetShareIntent();
-      return;
-    }
-
-    router.push({
-      pathname: "/(tabs)/archive",
-      params: {
-        sharedImageUri: sharedImage.path,
-        sharedImageName: sharedImage.fileName || "",
-        sharedImageMime: sharedImage.mimeType || "",
-      },
-    });
-    resetShareIntent();
-  }, [hasShareIntent, resetShareIntent, router, session, shareIntent.files]);
 
   if (isLoading) {
     return (
