@@ -37,6 +37,17 @@ This repo also contains a **React Native (Expo Router)** client under `app/`. It
    - `EXPO_PUBLIC_SUPABASE_ANON_KEY`
 4. `npm start`, then open in **Expo Go**, or press `i` / `a` / `w` for simulator / web.
 
+### Run on iOS simulator (i.e. to test share-sheet functionality)
+
+0. Make sure that XCode and iOS simulators are installed on your Mac. You must also be added as an owner in the expo account associated with the build.
+1. Use **Node 20+** (see `package.json` `engines` and optional `.nvmrc`).
+2. `npm install`
+3. Copy `.env.example` to `.env` and set:
+   - `EXPO_PUBLIC_SUPABASE_URL`
+   - `EXPO_PUBLIC_SUPABASE_ANON_KEY`
+4. In one terminal, run `npx expo start`.
+5. In another terminal, run `npx eas-cli@latest build --platform ios --profile ios-simulator` and then open the simulator by running `open -a Simulator`.
+
 ### Library search (what it does right now)
 
 Search and light “clustering” for the **Library** tab (`app/(tabs)/archive.tsx`) live in `lib/archiveSearchAndCluster.ts`. Data is **on-device** unless teammates wire the integration hooks in `lib/teamIntegrationPlaceholders.ts`.
