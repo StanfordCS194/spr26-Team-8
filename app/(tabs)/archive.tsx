@@ -13,9 +13,11 @@ import {
   removeSupplementalSearchText,
   upsertSupplementalSearchText,
 } from "@/lib/archiveSupplementalSearchText";
+import { extractTextTemporalSignals } from "@/lib/extractTemporalFromUserText";
 import { checkImageContext, moderateUpload } from "@/lib/moderation";
 import { fetchRemoteArchiveMeta, notifyArchiveIndexUpdated } from "@/lib/archiveBackendSync";
 import { fetchEmbeddingThemeOverrides } from "@/lib/embeddingThemes";
+import { MiniChatWindow } from "@/components/MiniChatWindow";
 import { embedAndStoreImage, searchByEmbedding } from "@/lib/embeddings";
 import { getWeeklyNudgeEnabled, setWeeklyNudgeEnabled } from "@/lib/nudgePrefs";
 import { extractSearchableTextFromImage } from "@/lib/vision";
@@ -417,15 +419,44 @@ export default function ArchiveTab() {
         return fail(`This image doesn't look like a memory worth saving (${context.reason}). Try another photo.`);
       }
 
-      const { data: memoryRow, error: insertMemErr } = await supabase
-        .from("memories")
-        .insert({
-          user_id: user.id,
-          source: "camera_roll",
-          user_caption: caption.trim() || null,
-        })
-        .select("memory_id")
-        .single();
+      const textTemporalPayload = extractTextTemporalSignals({
+        caption: caption.trim(),
+        want_to_do: wantToDoSaved || "",
+      });
+
+      const insertMinimal = async () =>
+        await supabase
+          .from("memories")
+          .insert({
+            user_id: user.id,
+            source: "camera_roll",
+            user_caption: caption.trim() || null,
+          })
+          .select("memory_id")
+          .single();
+
+      const insertWithTemporal = async () =>
+        await supabase
+          .from("memories")
+          .insert({
+            user_id: user.id,
+            source: "camera_roll",
+            user_caption: caption.trim() || null,
+            text_temporal: textTemporalPayload,
+          })
+          .select("memory_id")
+          .single();
+
+      let temporalSavedOnInsert = false;
+      let ins = await insertWithTemporal();
+      if (ins.error && isUndefinedColumnError(ins.error, "text_temporal")) {
+        ins = await insertMinimal();
+      } else if (!ins.error) {
+        temporalSavedOnInsert = true;
+      }
+
+      const memoryRow = ins.data;
+      const insertMemErr = ins.error;
       if (insertMemErr || !memoryRow) {
         return fail(insertMemErr?.message ?? "Could not create memory record.");
       }
@@ -437,6 +468,16 @@ export default function ArchiveTab() {
           .eq("memory_id", memoryRow.memory_id);
         if (__DEV__ && intentErr && !isUndefinedColumnError(intentErr, "want_to_do")) {
           console.warn("[archive] could not save want_to_do:", intentErr.message);
+        }
+      }
+
+      if (!temporalSavedOnInsert) {
+        const { error: temporalErr } = await supabase
+          .from("memories")
+          .update({ text_temporal: textTemporalPayload })
+          .eq("memory_id", memoryRow.memory_id);
+        if (__DEV__ && temporalErr && !isUndefinedColumnError(temporalErr, "text_temporal")) {
+          console.warn("[archive] could not save text_temporal:", temporalErr.message);
         }
       }
 
@@ -694,15 +735,18 @@ export default function ArchiveTab() {
               <View className="flex-row items-center justify-between">
                 <Text className="text-sm font-medium text-[#5F5F5F]">Your saves</Text>
                 {!isSelecting ? (
-                  <View ref={settingsButtonRef} collapsable={false} className="rounded-full">
-                    <Pressable
-                      accessibilityLabel="Account and settings"
-                      onPress={openSettingsMenu}
-                      hitSlop={8}
-                      className="rounded-full p-1.5 active:bg-black/5"
-                    >
-                      <Ionicons name="settings-outline" size={24} color="#2C2C2C" />
-                    </Pressable>
+                  <View className="flex-row items-center gap-1">
+                    <MiniChatWindow />
+                    <View ref={settingsButtonRef} collapsable={false} className="rounded-full">
+                      <Pressable
+                        accessibilityLabel="Account and settings"
+                        onPress={openSettingsMenu}
+                        hitSlop={8}
+                        className="rounded-full p-1.5 active:bg-black/5"
+                      >
+                        <Ionicons name="settings-outline" size={24} color="#2C2C2C" />
+                      </Pressable>
+                    </View>
                   </View>
                 ) : null}
               </View>
@@ -730,7 +774,7 @@ export default function ArchiveTab() {
               Upload screenshots, files, notes, and more.
             </Text>
             <View
-              className={`mt-4 h-12 flex-row items-center rounded-3xl border border-[#E6E1DA] bg-white px-3 shadow-sm ${
+              className={`mt-4 mb-4 h-12 flex-row items-center rounded-3xl border border-[#E6E1DA] bg-white px-3 shadow-sm ${
                 isSelecting ? "opacity-40" : ""
               }`}
             >
