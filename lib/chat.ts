@@ -131,6 +131,27 @@ export async function sendChatMessage(
     throw new Error("You need to sign in before using chat.");
   }
 
+  let memRes = await supabase
+    .from("memories")
+    .select("want_to_do, user_caption, ocr_description")
+    .eq("user_id", userId)
+    .order("memory_id", { ascending: false })
+    .limit(80);
+
+  if (memRes.error && isUndefinedColumnError(memRes.error, "want_to_do")) {
+    memRes = (await supabase
+      .from("memories")
+      .select("user_caption, ocr_description")
+      .eq("user_id", userId)
+      .order("memory_id", { ascending: false })
+      .limit(80)) as typeof memRes;
+  }
+
+  if (memRes.error) {
+    throw new Error(`Could not load memory context: ${memRes.error.message}`);
+  }
+
+  const memoryRows = memRes.data;
   let memoryRows: MemoryChatRow[];
   try {
     memoryRows = await loadMemoriesForChatContext(userId);
@@ -181,9 +202,20 @@ export async function sendChatMessage(
     "Prefer concrete, real‑world actions. If snippets are sparse, say so briefly and still give practical defaults.";
 
   const systemPromptDefault =
-    "You are a planning assistant embedded in Venn.\n" +
+    "You are Venn, the planning assistant. Reply like a friend over iMessage, opting for as conversational and succinct as possible.\n" +
     memoryDiscipline +
-    "\nWhen asked for a bucket list or itinerary, synthesize actionable ideas.";
+    "\n\nPick ONE shape:\n\n" +
+    "LIST — when the user says: list, itinerary, plan, ideas, options, things to (do/try/see), bucket list, packing list, suggestions, \"give me N\", \"N things\", \"what should I do\", OR your answer would name 3+ distinct places/activities. Qualifiers like \"a short\" don't downgrade — \"a short itinerary\" is still LIST.\n" +
+    "  Format exactly: one framing sentence, blank line, then 3–4 items (5 only if user asked for 5+):\n" +
+    "    N. **Short Title** — body sentence (~12–22 words)\n" +
+    "  Real, named things only. Quality > count.\n\n" +
+    "CONVO — everything else. 1–2 sentences, ≤30 words total. Warm, contractions OK. At most one **bold** phrase.\n" +
+    "  Multi-bubble texting (DEFAULT for any 2+ sentence CONVO reply): split your reply into 2 short bubbles by separating sentences with a blank line (\\n\\n). Each bubble is one short sentence (≤18 words). This makes it feel like real iMessage.\n" +
+    "  Greetings (\"hey\", \"hi\"), thanks, or trivial Qs (math, factual): ALWAYS exactly one short bubble, ≤15 words, ZERO follow-up question, ZERO upsell, ZERO second sentence. Examples (these are the WHOLE reply): \"Hey! What's up?\" / \"You're welcome!\" / \"2+2 is 4.\" Do NOT add a second bubble or a question like \"what would you like to do?\" — the user will say more if they want.\n" +
+    "  Never end with \"let me know if…\", \"if you want…\", \"hope you enjoy…\", \"sounds like…\", \"just say the word…\", or any unsolicited next step.\n" +
+    "  \"Tell me more about X\" / \"explain X\" → CONVO (facets of one topic aren't list items).\n" +
+    "  \"A good X\" / \"the best X\" / \"any X spot\" → CONVO with ONE rec.\n\n" +
+    "Never write prose that names 3+ options — convert to LIST.";
 
   const systemPromptInboxPlan =
     "You’re replying to someone who tapped a tiny inbox nudge — they want you to do the thinking legwork.\n" +
@@ -214,7 +246,7 @@ export async function sendChatMessage(
     },
     body: JSON.stringify({
       model: "gpt-4.1-mini",
-      temperature: style === "inbox_action_plan" ? 0.58 : 0.7,
+      temperature: style === "inbox_action_plan" ? 0.58 : 0.5,
       messages: [
         { role: "system", content: systemPrompt },
         {

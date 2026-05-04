@@ -27,6 +27,52 @@ function splitBoldParts(line: string): Part[] {
   return tokens.map((t, i) => ({ text: t, bold: i % 2 === 1 }));
 }
 
+export type StructuredItem = { title: string; body: string };
+export type StructuredReply = { intro: string; items: StructuredItem[] };
+
+const STRUCTURED_ITEM_RE =
+  /^\s*\d+[.)]\s*\*\*(.+?)\*\*\s*[—–-]\s*(.+)$/;
+
+export function splitConvoBubbles(text: string): string[] {
+  const parts = text
+    .split(/\n{2,}/)
+    .map((p) => p.trim())
+    .filter(Boolean);
+  if (parts.length <= 1) return [text.trim()];
+  const merged: string[] = [];
+  for (const p of parts) {
+    if (merged.length > 0 && p.length < 12) {
+      merged[merged.length - 1] += " " + p;
+    } else {
+      merged.push(p);
+    }
+  }
+  return merged.slice(0, 3);
+}
+
+export function parseStructuredReply(text: string): StructuredReply | null {
+  const lines = text.split(/\n/);
+  const items: StructuredItem[] = [];
+  let firstItemIndex = -1;
+
+  for (let i = 0; i < lines.length; i += 1) {
+    const m = lines[i].match(STRUCTURED_ITEM_RE);
+    if (m) {
+      if (firstItemIndex === -1) firstItemIndex = i;
+      items.push({ title: m[1].trim(), body: m[2].trim() });
+    }
+  }
+
+  if (items.length < 3) return null;
+
+  const intro = lines
+    .slice(0, firstItemIndex)
+    .join("\n")
+    .replace(/^\s+|\s+$/g, "");
+
+  return { intro, items };
+}
+
 export function MarkdownishBoldLine({
   line,
   className,

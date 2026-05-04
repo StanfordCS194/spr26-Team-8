@@ -1,4 +1,4 @@
-import { MarkdownishBoldLine } from "@/components/MarkdownishBoldLine";
+import { MarkdownishBoldLine, parseStructuredReply, splitConvoBubbles } from "@/components/MarkdownishBoldLine";
 import { exportChatTextToFile } from "@/lib/chatExport";
 import { CHAT_PROMPTS, sendChatMessage } from "@/lib/chat";
 import { posthog } from "@/lib/posthog";
@@ -30,7 +30,7 @@ type SelectedImage = {
   fileName?: string | null;
 };
 
-function AssistantMessageBody({ content }: { content: string }) {
+function AssistantPlainBody({ content }: { content: string }) {
   const lines = content.split(/\n/);
   return (
     <View className="gap-1.5">
@@ -48,6 +48,39 @@ function AssistantMessageBody({ content }: { content: string }) {
           />
         );
       })}
+    </View>
+  );
+}
+
+function AssistantMessageBody({ content }: { content: string }) {
+  const structured = parseStructuredReply(content);
+  if (!structured) return <AssistantPlainBody content={content} />;
+
+  return (
+    <View className="gap-2.5">
+      {structured.intro ? <AssistantPlainBody content={structured.intro} /> : null}
+      <View className="gap-2 border-l-2 border-[#E6E1DA] pl-3">
+        {structured.items.map((item, i) => (
+          <View
+            key={`item-${i}-${item.title.slice(0, 24)}`}
+            className="flex-row items-start gap-1.5"
+          >
+            <Text className="text-[15px] leading-[20px] font-semibold text-[#0B0B0B]">
+              {i + 1}.
+            </Text>
+            <View className="min-w-0 flex-1">
+              <MarkdownishBoldLine
+                line={`**${item.title}**`}
+                className="text-[15px] leading-[20px] text-[#0B0B0B]"
+                boldClassName="font-semibold"
+              />
+              <Text className="mt-0.5 text-[14px] leading-[20px] text-[#4A4540]">
+                {item.body}
+              </Text>
+            </View>
+          </View>
+        ))}
+      </View>
     </View>
   );
 }
@@ -94,7 +127,14 @@ export default function ActionTab() {
           trimmed,
           silent ? { style: "inbox_action_plan" } : undefined
         );
-        setMessages((m) => [...m, makeMessage("assistant", reply)]);
+        const bubbles = parseStructuredReply(reply) ? [reply] : splitConvoBubbles(reply);
+        setMessages((m) => [...m, { role: "assistant", text: bubbles[0] }]);
+        for (let i = 1; i < bubbles.length; i += 1) {
+          await new Promise((r) => setTimeout(r, 450));
+          const text = bubbles[i];
+          setMessages((m) => [...m, { role: "assistant", text }]);
+          requestAnimationFrame(() => scrollRef.current?.scrollToEnd({ animated: true }));
+        }
       } catch (err) {
         setMessages((m) => [
           ...m,
