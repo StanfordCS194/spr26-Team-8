@@ -128,11 +128,11 @@ export default function ActionTab() {
           silent ? { style: "inbox_action_plan" } : undefined
         );
         const bubbles = parseStructuredReply(reply) ? [reply] : splitConvoBubbles(reply);
-        setMessages((m) => [...m, { role: "assistant", text: bubbles[0] }]);
+        setMessages((m) => [...m, makeMessage("assistant", bubbles[0])]);
         for (let i = 1; i < bubbles.length; i += 1) {
           await new Promise((r) => setTimeout(r, 450));
           const text = bubbles[i];
-          setMessages((m) => [...m, { role: "assistant", text }]);
+          setMessages((m) => [...m, makeMessage("assistant", text)]);
           requestAnimationFrame(() => scrollRef.current?.scrollToEnd({ animated: true }));
         }
       } catch (err) {

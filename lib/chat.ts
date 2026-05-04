@@ -131,27 +131,6 @@ export async function sendChatMessage(
     throw new Error("You need to sign in before using chat.");
   }
 
-  let memRes = await supabase
-    .from("memories")
-    .select("want_to_do, user_caption, ocr_description")
-    .eq("user_id", userId)
-    .order("memory_id", { ascending: false })
-    .limit(80);
-
-  if (memRes.error && isUndefinedColumnError(memRes.error, "want_to_do")) {
-    memRes = (await supabase
-      .from("memories")
-      .select("user_caption, ocr_description")
-      .eq("user_id", userId)
-      .order("memory_id", { ascending: false })
-      .limit(80)) as typeof memRes;
-  }
-
-  if (memRes.error) {
-    throw new Error(`Could not load memory context: ${memRes.error.message}`);
-  }
-
-  const memoryRows = memRes.data;
   let memoryRows: MemoryChatRow[];
   try {
     memoryRows = await loadMemoriesForChatContext(userId);
