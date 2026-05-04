@@ -201,7 +201,7 @@ export async function sendChatMessage(
     "Use the numbered memory snippets as grounding. Snippets prefixed `[Uploaded locally: <time> · <date>]` are in the user's local timezone, newest first — answer time questions using those labels verbatim. If snippets are sparse, give practical defaults briefly.";
 
   const systemPromptDefault =
-    "You are Venn, a planning assistant. Reply like a friend texting — short and warm.\n" +
+    "You are Venn, a planning assistant. Reply like a friend texting based on the user's memory snippets, requests, and attached files — short and warm.\n" +
     memoryDiscipline +
     "\n\nDefault: 1–2 sentences, ≤25 words. For 2 sentences, split into 2 bubbles separated by a blank line. No upsell, no follow-up offers.\n\n" +
     "For lists, itineraries, plans, or 3+ distinct items, use this format:\n" +
@@ -223,7 +223,7 @@ export async function sendChatMessage(
   const systemPrompt =
     style === "inbox_action_plan" ? systemPromptInboxPlan : systemPromptDefault;
 
-  const response = await fetch("https://api.openai.com/v1/chat/completions", {
+  const requestInit: RequestInit = {
     method: "POST",
     headers: {
       Authorization: `Bearer ${apiKey}`,
@@ -237,7 +237,16 @@ export async function sendChatMessage(
         buildUserMessage(memoryContext, userText, options?.imageBase64s ?? []),
       ],
     }),
-  });
+  };
+
+  let response: Response;
+  try {
+    response = await fetch("https://api.openai.com/v1/chat/completions", requestInit);
+  } catch (err) {
+    if (!(err instanceof TypeError)) throw err;
+    await new Promise((r) => setTimeout(r, 500));
+    response = await fetch("https://api.openai.com/v1/chat/completions", requestInit);
+  }
 
   if (!response.ok) {
     const errBody = (await response.json().catch(() => ({}))) as {
