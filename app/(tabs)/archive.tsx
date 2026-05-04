@@ -29,6 +29,7 @@ import { Ionicons } from "@expo/vector-icons";
 import * as FileSystem from "expo-file-system/legacy";
 import * as ImageManipulator from "expo-image-manipulator";
 import * as ImagePicker from "expo-image-picker";
+import { useIncomingShare } from "expo-sharing";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert,
@@ -78,6 +79,12 @@ type MemoryFileRow = {
     | null;
 };
 
+type UploadAsset = {
+  uri: string;
+  fileName?: string | null;
+  mimeType?: string | null;
+};
+
 const isJpegAsset = (mimeType?: string | null, fileName?: string | null) => {
   const mime = (mimeType ?? "").toLowerCase();
   const name = (fileName ?? "").toLowerCase();
@@ -112,7 +119,7 @@ export default function ArchiveTab() {
   const [themeFilter, setThemeFilter] = useState<"all" | string>("all");
   const [supplementalSearchById, setSupplementalSearchById] = useState<Record<string, string>>({});
   const [selectedItem, setSelectedItem] = useState<BoardItem | null>(null);
-  const [pendingAsset, setPendingAsset] = useState<ImagePicker.ImagePickerAsset | null>(null);
+  const [pendingAsset, setPendingAsset] = useState<UploadAsset | null>(null);
   const [captionDraft, setCaptionDraft] = useState("");
   const [intentDraft, setIntentDraft] = useState("");
   const [weeklyNudgeEnabled, setWeeklyNudgeEnabledState] = useState(true);
@@ -133,6 +140,8 @@ export default function ArchiveTab() {
   const settingsButtonRef = useRef<View | null>(null);
   const insets = useSafeAreaInsets();
   const ACCOUNT_MENU_W = 208;
+  const { resolvedSharedPayloads, clearSharedPayloads, error: shareError, refreshSharePayloads } =
+    useIncomingShare();
 
   useEffect(() => {
     void loadSupplementalSearchText().then(setSupplementalSearchById);
@@ -143,6 +152,35 @@ export default function ArchiveTab() {
     void getWeeklyNudgeEnabled().then(setWeeklyNudgeEnabledState);
   }, [accountMenuOpen]);
 
+  useEffect(() => {
+    if (shareError) {
+      Alert.alert("Share", "Could not read incoming shared content.");
+    }
+  }, [shareError]);
+
+  useEffect(() => {
+    if (!resolvedSharedPayloads.length) return;
+
+    const sharedImageUris = resolvedSharedPayloads
+      .filter((payload) => payload.contentType === "image" && payload.contentUri)
+      .map((payload) => payload.contentUri)
+      .filter((uri): uri is string => typeof uri === "string");
+
+    if (!sharedImageUris.length) return;
+
+    const uri = sharedImageUris[0];
+    clearSharedPayloads();
+    void refreshSharePayloads();
+
+    setPendingAsset({
+      uri,
+      fileName: uri.split("/").pop() ?? `shared-${Date.now()}.jpg`,
+      mimeType: "image/jpeg",
+    });
+    setCaptionDraft("");
+    setIntentDraft("");
+  }, [clearSharedPayloads, refreshSharePayloads, resolvedSharedPayloads]);
+
   const loadItems = useCallback(async () => {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return setItems([]);
@@ -152,21 +190,22 @@ export default function ArchiveTab() {
     const SEL_LEGACY =
       "memory_id, ocr_description, user_caption, files(storage_path, file_name)";
 
-    let rowsRes = await supabase
+    const fullRes = await supabase
       .from("memories")
       .select(SEL_FULL)
       .eq("user_id", user.id)
       .not("file_id", "is", null)
       .order("memory_id", { ascending: true });
 
-    if (rowsRes.error && isUndefinedColumnError(rowsRes.error, "want_to_do")) {
-      rowsRes = await supabase
-        .from("memories")
-        .select(SEL_LEGACY)
-        .eq("user_id", user.id)
-        .not("file_id", "is", null)
-        .order("memory_id", { ascending: true });
-    }
+    const rowsRes =
+      fullRes.error && isUndefinedColumnError(fullRes.error, "want_to_do")
+        ? await supabase
+            .from("memories")
+            .select(SEL_LEGACY)
+            .eq("user_id", user.id)
+            .not("file_id", "is", null)
+            .order("memory_id", { ascending: true })
+        : fullRes;
 
     if (rowsRes.error) {
       if (__DEV__) console.warn("[archive] memories load:", rowsRes.error.message);
@@ -317,7 +356,12 @@ export default function ArchiveTab() {
         quality: 1,
       });
       if (picked.canceled || !picked.assets.length) return;
-      setPendingAsset(picked.assets[0]);
+      const selected = picked.assets[0];
+      setPendingAsset({
+        uri: selected.uri,
+        fileName: selected.fileName,
+        mimeType: selected.mimeType,
+      });
     } catch {
       fail("Could not open photo library.");
     }
@@ -354,19 +398,6 @@ export default function ArchiveTab() {
 
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return fail("Could not identify the current user.");
-
-      if (asset.fileName) {
-        const sanitizedName = isJpegAsset(asset.mimeType, rawName)
-          ? asset.fileName.replace(/[^\w.\-]/g, "_")
-          : `${sanitizedBaseName}.jpeg`;
-        const { data: existing } = await supabase
-          .from("files")
-          .select("file_id")
-          .eq("user_id", user.id)
-          .ilike("file_name", `%-${sanitizedName}`)
-          .limit(1);
-        if (existing && existing.length > 0) return fail("This photo has already been uploaded.");
-      }
 
       const base64 = await FileSystem.readAsStringAsync(uploadUri, {
         encoding: FileSystem.EncodingType.Base64,
