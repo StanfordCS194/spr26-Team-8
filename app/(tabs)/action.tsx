@@ -8,6 +8,7 @@ import { useFocusEffect } from "@react-navigation/native";
 import { router, useLocalSearchParams } from "expo-router";
 import { useCallback, useRef, useState } from "react";
 import { Image } from "expo-image";
+import { File } from "expo-file-system";
 import * as ImagePicker from "expo-image-picker";
 import {
   ActivityIndicator,
@@ -22,7 +23,12 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
-type ChatMessage = { id: string; role: "user" | "assistant"; text: string };
+type ChatMessage = {
+  id: string;
+  role: "user" | "assistant";
+  text: string;
+  imageUris?: string[];
+};
 type SelectedImage = {
   uri: string;
   width?: number;
@@ -100,10 +106,15 @@ export default function ActionTab() {
   const chatSessionId = useRef(`chat-${Date.now()}`).current;
 
   const makeMessage = useCallback(
-    (role: "user" | "assistant", text: string): ChatMessage => ({
+    (
+      role: "user" | "assistant",
+      text: string,
+      imageUris?: string[]
+    ): ChatMessage => ({
       id: `${role}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       role,
       text,
+      imageUris,
     }),
     []
   );
@@ -111,22 +122,32 @@ export default function ActionTab() {
   const appendExchange = useCallback(
     async (userText: string, opts?: { silent?: boolean }) => {
       const trimmed = userText.trim();
-      if (!trimmed || sending) return;
       const silent = Boolean(opts?.silent);
+      const attached = silent ? [] : selectedImages;
+      if ((!trimmed && attached.length === 0) || sending) return;
       setShowQuickActions(false);
       setSending(true);
+      const attachedUris = attached.map((img) => img.uri);
+      if (attached.length > 0) setSelectedImages([]);
       if (!silent) {
-        setMessages((m) => [...m, makeMessage("user", trimmed)]);
+        setMessages((m) => [
+          ...m,
+          makeMessage("user", trimmed, attachedUris.length ? attachedUris : undefined),
+        ]);
       }
       posthog.capture("chat_message_sent", {
         chat_session_id: chatSessionId,
         silent_handoff: silent ? 1 : 0,
+        image_count: attachedUris.length,
       });
       try {
-        const reply = await sendChatMessage(
-          trimmed,
-          silent ? { style: "inbox_action_plan" } : undefined
+        const imageBase64s = await Promise.all(
+          attachedUris.map((uri) => new File(uri).base64())
         );
+        const reply = await sendChatMessage(trimmed, {
+          ...(silent ? { style: "inbox_action_plan" as const } : {}),
+          imageBase64s,
+        });
         const bubbles = parseStructuredReply(reply) ? [reply] : splitConvoBubbles(reply);
         setMessages((m) => [...m, makeMessage("assistant", bubbles[0])]);
         for (let i = 1; i < bubbles.length; i += 1) {
@@ -150,7 +171,7 @@ export default function ActionTab() {
         requestAnimationFrame(() => scrollRef.current?.scrollToEnd({ animated: true }));
       }
     },
-    [sending, chatSessionId, makeMessage]
+    [sending, chatSessionId, makeMessage, selectedImages]
   );
 
   useFocusEffect(
@@ -207,13 +228,13 @@ export default function ActionTab() {
     }
 
     const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      mediaTypes: ["images"],
       allowsMultipleSelection: true,
-      selectionLimit: 10,
-      quality: 1,
+      selectionLimit: 4,
+      quality: 0.7,
     });
 
-    if (result.canceled) return;
+    if (result.canceled || !result.assets?.length) return;
 
     setSelectedImages((prev) => {
       const next = [
@@ -267,7 +288,25 @@ export default function ActionTab() {
                   }`}
                 >
                   {msg.role === "user" ? (
-                    <Text className="text-base leading-6 text-white">{msg.text}</Text>
+                    <View>
+                      {msg.imageUris && msg.imageUris.length > 0 ? (
+                        <View
+                          className={`flex-row flex-wrap gap-1.5 ${msg.text ? "mb-2" : ""}`}
+                        >
+                          {msg.imageUris.map((uri, i) => (
+                            <Image
+                              key={`${msg.id}-img-${i}`}
+                              source={{ uri }}
+                              contentFit="cover"
+                              className="h-32 w-32 rounded-2xl bg-[#2A2A2A]"
+                            />
+                          ))}
+                        </View>
+                      ) : null}
+                      {msg.text ? (
+                        <Text className="text-base leading-6 text-white">{msg.text}</Text>
+                      ) : null}
+                    </View>
                   ) : (
                     <View>
                       <AssistantMessageBody content={msg.text} />
@@ -349,36 +388,7 @@ export default function ActionTab() {
           </SafeAreaView>
 
           <View className="bg-[#F4F0EA] px-3 pb-4 pt-2">
-            {selectedImages.length ? (
-              <ScrollView
-                horizontal
-                showsHorizontalScrollIndicator={false}
-                className="mb-2"
-                contentContainerClassName="gap-2 px-1"
-              >
-                {selectedImages.map((img) => (
-                  <View key={img.uri} className="relative">
-                    <Image
-                      source={{ uri: img.uri }}
-                      contentFit="cover"
-                      className="h-16 w-16 rounded-2xl border border-[#E6E1DA] bg-white"
-                    />
-                    <Pressable
-                      accessibilityRole="button"
-                      onPress={() =>
-                        setSelectedImages((prev) => prev.filter((p) => p.uri !== img.uri))
-                      }
-                      hitSlop={10}
-                      className="absolute -right-1 -top-1 h-6 w-6 items-center justify-center rounded-full bg-[#0B0B0B] active:opacity-80"
-                    >
-                      <Ionicons name="close" size={14} color="#FFFFFF" />
-                    </Pressable>
-                  </View>
-                ))}
-              </ScrollView>
-            ) : null}
-
-            <View className="flex-row items-center gap-2">
+            <View className="flex-row items-end gap-2">
               <Pressable
                 accessibilityRole="button"
                 onPress={() => void pickImages()}
@@ -388,31 +398,78 @@ export default function ActionTab() {
                 <Ionicons name="add" size={24} color="#0B0B0B" />
               </Pressable>
 
-              <View className="min-h-[44px] flex-1 flex-row items-center rounded-full border border-[#E6E1DA] bg-[#F0EBE3] px-4 py-1">
-                <TextInput
-                  value={input}
-                  onChangeText={setInput}
-                  placeholder="What would you like to do today?"
-                  placeholderTextColor="rgba(95, 95, 95, 0.55)"
-                  className="min-h-[36px] flex-1 text-[#0B0B0B]"
-                  style={{ fontSize: 16, lineHeight: 22, paddingVertical: 0 }}
-                  multiline={false}
-                  scrollEnabled={false}
-                  textAlignVertical="center"
-                  editable={!sending}
-                  onSubmitEditing={() => {
-                    void appendExchange(input);
-                    setInput("");
-                  }}
-                  returnKeyType="send"
-                />
-                <Pressable
-                  accessibilityRole="button"
-                  className="ml-1 p-1 active:opacity-70"
-                  hitSlop={8}
-                >
-                  <Ionicons name="mic-outline" size={22} color="rgba(95, 95, 95, 0.55)" />
-                </Pressable>
+              <View className="min-h-[44px] flex-1 rounded-3xl border border-[#E6E1DA] bg-[#F0EBE3] px-3 py-2">
+                {selectedImages.length ? (
+                  <View
+                    className="mb-2 flex-row flex-wrap gap-1.5"
+                    style={{ minHeight: 80 }}
+                  >
+                    {selectedImages.map((img) => (
+                      <View
+                        key={img.uri}
+                        className="relative"
+                        style={{ width: 80, height: 80 }}
+                      >
+                        <Image
+                          source={{ uri: img.uri }}
+                          contentFit="cover"
+                          style={{
+                            width: 80,
+                            height: 80,
+                            borderRadius: 12,
+                            backgroundColor: "#E0DAD0",
+                          }}
+                        />
+                        <Pressable
+                          accessibilityRole="button"
+                          onPress={() =>
+                            setSelectedImages((prev) => prev.filter((p) => p.uri !== img.uri))
+                          }
+                          hitSlop={10}
+                          style={{
+                            position: "absolute",
+                            top: -6,
+                            right: -6,
+                            width: 24,
+                            height: 24,
+                            borderRadius: 12,
+                            backgroundColor: "rgba(0,0,0,0.7)",
+                            alignItems: "center",
+                            justifyContent: "center",
+                          }}
+                        >
+                          <Ionicons name="close" size={14} color="#FFFFFF" />
+                        </Pressable>
+                      </View>
+                    ))}
+                  </View>
+                ) : null}
+                <View className="flex-row items-center">
+                  <TextInput
+                    value={input}
+                    onChangeText={setInput}
+                    placeholder="What would you like to do today?"
+                    placeholderTextColor="rgba(95, 95, 95, 0.55)"
+                    className="min-h-[28px] flex-1 text-[#0B0B0B]"
+                    style={{ fontSize: 16, lineHeight: 22, paddingVertical: 0 }}
+                    multiline={false}
+                    scrollEnabled={false}
+                    textAlignVertical="center"
+                    editable={!sending}
+                    onSubmitEditing={() => {
+                      void appendExchange(input);
+                      setInput("");
+                    }}
+                    returnKeyType="send"
+                  />
+                  <Pressable
+                    accessibilityRole="button"
+                    className="ml-1 p-1 active:opacity-70"
+                    hitSlop={8}
+                  >
+                    <Ionicons name="mic-outline" size={22} color="rgba(95, 95, 95, 0.55)" />
+                  </Pressable>
+                </View>
               </View>
 
               <Pressable
@@ -421,7 +478,7 @@ export default function ActionTab() {
                   void appendExchange(input);
                   setInput("");
                 }}
-                disabled={sending || !input.trim()}
+                disabled={sending || (!input.trim() && selectedImages.length === 0)}
                 className="h-9 w-9 items-center justify-center rounded-full bg-[#0B0B0B] active:opacity-80 disabled:opacity-40"
               >
                 <Ionicons name="send" size={18} color="#FFFFFF" />

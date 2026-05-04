@@ -103,6 +103,30 @@ async function loadMemoriesForChatContext(userId: string): Promise<MemoryChatRow
   throw new Error(`Could not load memory context: ${lastMessage}`);
 }
 
+function buildUserMessage(
+  memoryContext: string,
+  userText: string,
+  imageBase64s: string[]
+) {
+  const trimmed = userText.trim();
+  const textBlock =
+    `Memory snippets:\n${memoryContext}\n\n` +
+    `User request: ${trimmed || "(image attached, no text)"}`;
+  if (imageBase64s.length === 0) {
+    return { role: "user" as const, content: textBlock };
+  }
+  return {
+    role: "user" as const,
+    content: [
+      { type: "text" as const, text: textBlock },
+      ...imageBase64s.map((b64) => ({
+        type: "image_url" as const,
+        image_url: { url: `data:image/jpeg;base64,${b64}` },
+      })),
+    ],
+  };
+}
+
 /** Suggested prompts for the Action tab until API-driven suggestions exist. */
 export const CHAT_PROMPTS = [
   "Create a bucket list for this weekend",
@@ -113,7 +137,7 @@ export type ChatResponseStyle = "default" | "inbox_action_plan";
 
 export async function sendChatMessage(
   userText: string,
-  options?: { style?: ChatResponseStyle }
+  options?: { style?: ChatResponseStyle; imageBase64s?: string[] }
 ): Promise<string> {
   if (!USE_GENERATIVE_CHAT_API) {
     return `Echo: ${userText.trim() || "(empty)"}`;
@@ -228,12 +252,7 @@ export async function sendChatMessage(
       temperature: style === "inbox_action_plan" ? 0.58 : 0.5,
       messages: [
         { role: "system", content: systemPrompt },
-        {
-          role: "user",
-          content:
-            `Memory snippets:\n${memoryContext}\n\n` +
-            `User request: ${userText.trim()}`,
-        },
+        buildUserMessage(memoryContext, userText, options?.imageBase64s ?? []),
       ],
     }),
   });
