@@ -9,6 +9,7 @@ import { router, useLocalSearchParams } from "expo-router";
 import { useCallback, useRef, useState } from "react";
 import { Image } from "expo-image";
 import { File } from "expo-file-system";
+import { ImageManipulator, SaveFormat } from "expo-image-manipulator";
 import * as ImagePicker from "expo-image-picker";
 import {
   ActivityIndicator,
@@ -142,7 +143,16 @@ export default function ActionTab() {
       });
       try {
         const imageBase64s = await Promise.all(
-          attachedUris.map((uri) => new File(uri).base64())
+          attachedUris.map(async (uri) => {
+            const ref = await ImageManipulator.manipulate(uri)
+              .resize({ width: 1536 })
+              .renderAsync();
+            const jpeg = await ref.saveAsync({
+              format: SaveFormat.JPEG,
+              compress: 0.85,
+            });
+            return new File(jpeg.uri).base64();
+          })
         );
         const reply = await sendChatMessage(trimmed, {
           ...(silent ? { style: "inbox_action_plan" as const } : {}),
