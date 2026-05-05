@@ -140,7 +140,7 @@ export function MiniChatWindow() {
             <ScrollView
               ref={scrollRef}
               className="flex-1 px-4 pt-3"
-              contentContainerClassName="pb-4"
+              contentContainerStyle={{ flexGrow: 0, paddingBottom: 16 }}
               keyboardShouldPersistTaps="handled"
               keyboardDismissMode="on-drag"
             >
@@ -165,66 +165,92 @@ export function MiniChatWindow() {
                   </View>
                 </View>
               ) : null}
-              {messages.map((msg, i) => (
-                <View
-                  key={msg.id}
-                  className={`mb-2.5 max-w-[92%] rounded-2xl px-3.5 py-2.5 ${
-                    msg.role === "user"
-                      ? "self-end bg-[#0B0B0B]"
-                      : "self-start border border-[#E6E1DA] bg-white"
-                  }`}
-                >
-                  <Text
-                    className={`text-sm leading-5 ${msg.role === "user" ? "text-white" : "text-[#0B0B0B]"}`}
+              {messages.map((msg) =>
+                msg.role === "user" ? (
+                  <View
+                    key={msg.id}
+                    className="mb-2.5 max-w-[92%] shrink-0 self-end rounded-2xl bg-[#0B0B0B] px-3.5 py-2.5"
                   >
-                    {msg.text}
-                  </Text>
-                  {msg.role === "assistant" ? (
-                    <View className="mt-2 flex-row justify-end">
-                      <View className="flex-row items-center gap-2">
-                        <Pressable
-                          accessibilityRole="button"
-                          accessibilityLabel="Download chat output"
-                          onPress={() => {
-                            void exportChatTextToFile(msg.text, msg.text)
-                              .then(() => Alert.alert("Download", "Use the share sheet to save this to Files."))
-                              .catch((err) =>
-                                Alert.alert(
-                                  "Download failed",
-                                  err instanceof Error ? err.message : "Could not export output."
+                    <Text className="text-sm leading-5 text-white">{msg.text}</Text>
+                  </View>
+                ) : (
+                  <View
+                    key={msg.id}
+                    collapsable={Platform.OS === "android" ? false : undefined}
+                    className="mb-2.5 max-w-[85%] shrink-0 self-start rounded-2xl"
+                    style={
+                      Platform.OS === "ios"
+                        ? {
+                            shadowColor: "#000000",
+                            shadowOffset: { width: 0, height: 1 },
+                            shadowOpacity: 0.05,
+                            shadowRadius: 3,
+                          }
+                        : undefined
+                    }
+                  >
+                    <View
+                      collapsable={Platform.OS === "android" ? false : undefined}
+                      className="w-full shrink-0 overflow-hidden rounded-2xl border border-[#E6E1DA] bg-white px-5 py-2.5"
+                      style={
+                        Platform.OS === "android"
+                          ? {
+                              elevation: 2,
+                            }
+                          : undefined
+                      }
+                    >
+                      <View className="w-full shrink-0">
+                        <Text className="text-sm leading-5 text-[#0B0B0B]">{msg.text}</Text>
+                      </View>
+                      <View className="mt-4 w-full shrink-0 border-t border-[#EDE8DF] pt-3">
+                        <View className="shrink-0 flex-row justify-end gap-2">
+                          <Pressable
+                            accessibilityRole="button"
+                            accessibilityLabel="Download chat output"
+                            onPress={() => {
+                              void exportChatTextToFile(msg.text, msg.text)
+                                .then(() =>
+                                  Alert.alert("Download", "Use the share sheet to save this to Files.")
                                 )
+                                .catch((err) =>
+                                  Alert.alert(
+                                    "Download failed",
+                                    err instanceof Error ? err.message : "Could not export output."
+                                  )
+                                );
+                            }}
+                            className="flex-row items-center gap-1 rounded-full border border-[#DDD7CC] bg-[#FFFCF8] px-2 py-1 active:opacity-80"
+                          >
+                            <Ionicons name="download-outline" size={12} color="#0B0B0B" />
+                            <Text className="text-[11px] font-semibold text-[#0B0B0B]">Download</Text>
+                          </Pressable>
+                          <Pressable
+                            accessibilityRole="button"
+                            accessibilityLabel="Save chat output"
+                            onPress={() => {
+                              void saveChatOutput(msg.text).then(() =>
+                                setSavedMessageIds((prev) => ({ ...prev, [msg.id]: true }))
                               );
-                          }}
-                          className="flex-row items-center gap-1 rounded-full border border-[#E6E1DA] bg-[#FFFCF8] px-2 py-1 active:opacity-80"
-                        >
-                          <Ionicons name="download-outline" size={12} color="#0B0B0B" />
-                          <Text className="text-[11px] font-semibold text-[#0B0B0B]">Download</Text>
-                        </Pressable>
-                        <Pressable
-                          accessibilityRole="button"
-                          accessibilityLabel="Save chat output"
-                          onPress={() => {
-                            void saveChatOutput(msg.text).then(() =>
-                              setSavedMessageIds((prev) => ({ ...prev, [msg.id]: true }))
-                            );
-                          }}
-                          disabled={Boolean(savedMessageIds[msg.id])}
-                          className="flex-row items-center gap-1 rounded-full border border-[#E6E1DA] bg-[#FFFCF8] px-2 py-1 active:opacity-80 disabled:opacity-60"
-                        >
-                          <Ionicons
-                            name={savedMessageIds[msg.id] ? "bookmark" : "bookmark-outline"}
-                            size={12}
-                            color="#0B0B0B"
-                          />
-                          <Text className="text-[11px] font-semibold text-[#0B0B0B]">
-                            {savedMessageIds[msg.id] ? "Saved" : "Save"}
-                          </Text>
-                        </Pressable>
+                            }}
+                            disabled={Boolean(savedMessageIds[msg.id])}
+                            className="flex-row items-center gap-1 rounded-full border border-[#DDD7CC] bg-[#FFFCF8] px-2 py-1 active:opacity-80 disabled:opacity-60"
+                          >
+                            <Ionicons
+                              name={savedMessageIds[msg.id] ? "bookmark" : "bookmark-outline"}
+                              size={12}
+                              color="#0B0B0B"
+                            />
+                            <Text className="text-[11px] font-semibold text-[#0B0B0B]">
+                              {savedMessageIds[msg.id] ? "Saved" : "Save"}
+                            </Text>
+                          </Pressable>
+                        </View>
                       </View>
                     </View>
-                  ) : null}
-                </View>
-              ))}
+                  </View>
+                )
+              )}
               {sending ? (
                 <View className="flex-row items-center gap-2 py-1">
                   <ActivityIndicator size="small" color="#0B0B0B" />

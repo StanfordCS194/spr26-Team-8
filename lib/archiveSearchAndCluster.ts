@@ -129,7 +129,7 @@ export function inferTheme(tags: string[], fileName: string): string {
   for (const rule of THEME_RULES) {
     if (rule.needles.some((n) => hay.includes(n))) return rule.theme;
   }
-  return "life";
+  return "misc";
 }
 
 export function buildSearchBlob(

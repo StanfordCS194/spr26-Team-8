@@ -1,7 +1,6 @@
 import type { ArchiveItemMeta } from "@/lib/archiveSearchAndCluster";
 import {
   archiveIndexForBackend,
-  distinctThemes,
   enrichArchiveRows,
   hydrateArchiveMeta,
   mergeArchiveMeta,
@@ -124,7 +123,6 @@ export default function ArchiveTab() {
   const [meta, setMeta] = useState<Record<string, ArchiveItemMeta>>({});
   const [themeOverrides, setThemeOverrides] = useState<Record<string, string>>({});
   const [searchQuery, setSearchQuery] = useState("");
-  const [themeFilter, setThemeFilter] = useState<"all" | string>("all");
   const [supplementalSearchById, setSupplementalSearchById] = useState<Record<string, string>>({});
   const [selectedItem, setSelectedItem] = useState<BoardItem | null>(null);
   const [pendingAsset, setPendingAsset] = useState<UploadAsset | null>(null);
@@ -385,11 +383,9 @@ export default function ArchiveTab() {
   }, [indexPayload]);
 
   const searchResults = useMemo(
-    () => searchAndRankArchiveRows(indexRows, searchQuery, themeFilter),
-    [indexRows, searchQuery, themeFilter]
+    () => searchAndRankArchiveRows(indexRows, searchQuery, "all"),
+    [indexRows, searchQuery]
   );
-
-  const themeOptions = useMemo(() => distinctThemes(indexRows), [indexRows]);
 
   const itemsById = useMemo(
     () => new Map(items.map((item) => [item.id, item] as const)),
@@ -877,7 +873,7 @@ export default function ArchiveTab() {
                 value={searchQuery}
                 onChangeText={setSearchQuery}
                 editable={!isSelecting}
-                placeholder="Search titles, tags, categories…"
+                placeholder="Search titles, tags…"
                 placeholderTextColor="rgba(95, 95, 95, 0.55)"
                 multiline={false}
                 autoCorrect={false}
@@ -912,61 +908,24 @@ export default function ArchiveTab() {
               />
             }
           >
-            <Text className="mt-4 text-xs font-semibold uppercase tracking-[0.2em] text-[#6B6B6B]">Categories</Text>
-            <View className="mt-2.5 flex-row items-center gap-2">
-              <ScrollView
-                horizontal
-                showsHorizontalScrollIndicator={false}
-                className="min-w-0 flex-1"
-                contentContainerClassName="flex-row flex-nowrap items-center gap-2 pr-1"
-                pointerEvents={isSelecting ? "none" : "auto"}
-              >
-                <Pressable
-                  onPress={() => setThemeFilter("all")}
-                  className={`rounded-full px-4 py-2 ${
-                    themeFilter === "all" ? "bg-[#0B0B0B]" : "border border-[#E6E1DA] bg-white"
-                  }`}
-                >
-                  <Text
-                    className={`text-sm font-semibold ${
-                      themeFilter === "all" ? "text-white" : "text-[#0B0B0B]"
-                    }`}
-                  >
-                    All
-                  </Text>
-                </Pressable>
-                {themeOptions.map((theme) => {
-                  const active = themeFilter === theme;
-                  return (
-                    <Pressable
-                      key={theme}
-                      onPress={() => setThemeFilter(active ? "all" : theme)}
-                      className={`rounded-full px-4 py-2 ${
-                        active ? "bg-[#0B0B0B]" : "border border-[#E6E1DA] bg-white"
-                      }`}
-                    >
-                      <Text
-                        className={`text-sm font-semibold capitalize ${
-                          active ? "text-white" : "text-[#0B0B0B]"
-                        }`}
-                      >
-                        {theme}
-                      </Text>
-                    </Pressable>
-                  );
-                })}
-              </ScrollView>
+            <View className="mt-4 flex-row justify-end">
               {isSelecting || gridCells.length > 0 ? (
                 <Pressable
                   onPress={isSelecting ? clearSelection : enterSelectMode}
-                  accessibilityLabel={isSelecting ? "Cancel selection" : "Select photos"}
-                  className="h-9 w-9 shrink-0 items-center justify-center rounded-full border border-[#DED9D0] bg-white shadow-sm active:bg-[#F0EBE2]"
+                  accessibilityLabel={isSelecting ? "Cancel" : "Select"}
+                  accessibilityHint={
+                    isSelecting ? "Stop choosing photos to delete" : "Choose photos to delete or manage"
+                  }
+                  className="shrink-0 flex-row items-center gap-2 rounded-full border border-[#DED9D0] bg-white px-3.5 py-2 shadow-sm active:bg-[#F0EBE2]"
                 >
                   <Ionicons
-                    name={isSelecting ? "close" : "checkmark-circle-outline"}
-                    size={isSelecting ? 22 : 20}
+                    name={isSelecting ? "close" : "images-outline"}
+                    size={isSelecting ? 20 : 19}
                     color={isSelecting ? "#5C534A" : "#1A1A1A"}
                   />
+                  <Text className="text-sm font-semibold text-[#0B0B0B]">
+                    {isSelecting ? "Cancel" : "Select"}
+                  </Text>
                 </Pressable>
               ) : null}
             </View>
@@ -976,17 +935,14 @@ export default function ArchiveTab() {
                 <Text className="text-center text-sm text-[#5F5F5F]">
                   {items.length === 0
                     ? "No uploads yet. Tap Add to library to add your first image."
-                    : "Nothing matches this search or filter. New uploads are often under “All” and “life” until tags catch up — or your search is hiding them."}
+                    : "Nothing matches this search. Try different words — or wait for tags to update on new uploads."}
                 </Text>
-                {items.length > 0 && (searchQuery.trim().length > 0 || themeFilter !== "all") ? (
+                {items.length > 0 && searchQuery.trim().length > 0 ? (
                   <Pressable
-                    onPress={() => {
-                      setSearchQuery("");
-                      setThemeFilter("all");
-                    }}
+                    onPress={() => setSearchQuery("")}
                     className="mt-3 rounded-full border border-[#DED9D0] bg-white px-4 py-2 active:bg-[#F0EBE2]"
                   >
-                    <Text className="text-sm font-semibold text-[#0B0B0B]">Show all photos</Text>
+                    <Text className="text-sm font-semibold text-[#0B0B0B]">Clear search</Text>
                   </Pressable>
                 ) : null}
               </View>

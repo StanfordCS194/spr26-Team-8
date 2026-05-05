@@ -31,7 +31,7 @@ export type StructuredItem = { title: string; body: string };
 export type StructuredReply = { intro: string; items: StructuredItem[] };
 
 const STRUCTURED_ITEM_RE =
-  /^\s*\d+[.)]\s*\*\*(.+?)\*\*\s*[—–-]\s*(.+)$/;
+  /^\s*\d+[.)]\s*\*\*(.+?)\*\*\s*[—–\-:]\s*(.+)$/;
 
 export function splitConvoBubbles(text: string): string[] {
   const parts = text
@@ -52,23 +52,25 @@ export function splitConvoBubbles(text: string): string[] {
 
 export function parseStructuredReply(text: string): StructuredReply | null {
   const lines = text.split(/\n/);
-  const items: StructuredItem[] = [];
-  let firstItemIndex = -1;
+  const matched: { lineIndex: number; title: string; bodyLine: string }[] = [];
 
   for (let i = 0; i < lines.length; i += 1) {
     const m = lines[i].match(STRUCTURED_ITEM_RE);
-    if (m) {
-      if (firstItemIndex === -1) firstItemIndex = i;
-      items.push({ title: m[1].trim(), body: m[2].trim() });
-    }
+    if (m) matched.push({ lineIndex: i, title: m[1].trim(), bodyLine: m[2].trim() });
   }
 
-  if (items.length < 3) return null;
+  if (matched.length < 3) return null;
 
-  const intro = lines
-    .slice(0, firstItemIndex)
-    .join("\n")
-    .replace(/^\s+|\s+$/g, "");
+  const items: StructuredItem[] = matched.map((row, j) => {
+    const afterLine = row.lineIndex + 1;
+    const untilNext =
+      j + 1 < matched.length ? matched[j + 1].lineIndex : lines.length;
+    const tail = lines.slice(afterLine, untilNext).join("\n").trim();
+    const body = tail ? `${row.bodyLine}\n${tail}`.trim() : row.bodyLine;
+    return { title: row.title, body };
+  });
+
+  const intro = lines.slice(0, matched[0].lineIndex).join("\n").trim();
 
   return { intro, items };
 }

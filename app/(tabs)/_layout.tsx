@@ -31,8 +31,9 @@ export default function TabsLayout() {
             tabBarInactiveTintColor: "rgba(95, 95, 95, 0.75)",
             tabBarStyle: {
               backgroundColor: venn.tabBar,
-              borderTopColor: venn.hairline,
-              borderTopWidth: 0.5,
+              borderTopWidth: 0,
+              elevation: 0,
+              shadowOpacity: 0,
               height: 64,
               paddingBottom: 10,
               paddingTop: 10,
