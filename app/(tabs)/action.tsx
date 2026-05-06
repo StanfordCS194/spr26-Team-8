@@ -1,5 +1,5 @@
 import { MarkdownishBoldLine, parseStructuredReply, splitConvoBubbles } from "@/components/MarkdownishBoldLine";
-import { exportChatTextToFile } from "@/lib/chatExport";
+import { copyChatOutput } from "@/lib/copyChatOutput";
 import { CHAT_PROMPTS, sendChatMessage } from "@/lib/chat";
 import { posthog } from "@/lib/posthog";
 import { saveChatOutput } from "@/lib/savedChatOutputs";
@@ -352,23 +352,12 @@ export default function ActionTab() {
                         <View className="shrink-0 flex-row flex-wrap justify-end gap-4">
                           <Pressable
                             accessibilityRole="button"
-                            accessibilityLabel="Download chat output"
-                            onPress={() => {
-                              void exportChatTextToFile(msg.text, msg.text)
-                                .then(() =>
-                                  Alert.alert("Download", "Use the share sheet to save this to Files.")
-                                )
-                                .catch((err) =>
-                                  Alert.alert(
-                                    "Download failed",
-                                    err instanceof Error ? err.message : "Could not export output."
-                                  )
-                                );
-                            }}
+                            accessibilityLabel="Copy chat output"
+                            onPress={() => void copyChatOutput(msg.text)}
                             className="flex-row items-center gap-1 rounded-full border border-[#DDD7CC] bg-[#FFFCF8] px-2.5 py-1.5 active:opacity-80"
                           >
-                            <Ionicons name="download-outline" size={14} color="#0B0B0B" />
-                            <Text className="text-xs font-semibold text-[#0B0B0B]">Download</Text>
+                            <Ionicons name="copy-outline" size={14} color="#0B0B0B" />
+                            <Text className="text-xs font-semibold text-[#0B0B0B]">Copy</Text>
                           </Pressable>
                           <Pressable
                             accessibilityRole="button"
