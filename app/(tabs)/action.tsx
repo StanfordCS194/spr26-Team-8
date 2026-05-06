@@ -7,7 +7,7 @@ import {
 } from "@/lib/fetchMemoryThumbnailUrls";
 import { CHAT_PROMPTS, sendChatMessage } from "@/lib/chat";
 import { posthog } from "@/lib/posthog";
-import { saveChatOutput } from "@/lib/savedChatOutputs";
+import { saveChatOutput, suggestSavedChatOutputTitle } from "@/lib/savedChatOutputs";
 import { Ionicons } from "@expo/vector-icons";
 import { useFocusEffect } from "@react-navigation/native";
 import { router, useLocalSearchParams } from "expo-router";
@@ -18,6 +18,7 @@ import { ImageManipulator, SaveFormat } from "expo-image-manipulator";
 import * as ImagePicker from "expo-image-picker";
 import {
   ActivityIndicator,
+  Alert,
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -118,6 +119,29 @@ export default function ActionTab() {
   const [savedMessageIds, setSavedMessageIds] = useState<Record<string, boolean>>({});
   const scrollRef = useRef<ScrollView>(null);
   const chatSessionId = useRef(`chat-${Date.now()}`).current;
+
+  const handleSaveMessage = useCallback((messageId: string, messageText: string) => {
+    const saveWithTitle = (title?: string) => {
+      void saveChatOutput(messageText, { title }).then(() =>
+        setSavedMessageIds((prev) => ({ ...prev, [messageId]: true }))
+      );
+    };
+    const suggested = suggestSavedChatOutputTitle(messageText);
+    if (Platform.OS === "ios") {
+      Alert.prompt(
+        "Save note",
+        "Edit the title before saving.",
+        [
+          { text: "Cancel", style: "cancel" },
+          { text: "Save", onPress: (value) => saveWithTitle(value) },
+        ],
+        "plain-text",
+        suggested
+      );
+      return;
+    }
+    saveWithTitle(suggested);
+  }, []);
 
   const makeMessage = useCallback(
     (
@@ -385,11 +409,7 @@ export default function ActionTab() {
                           <Pressable
                             accessibilityRole="button"
                             accessibilityLabel="Save chat output"
-                            onPress={() => {
-                              void saveChatOutput(msg.text).then(() =>
-                                setSavedMessageIds((prev) => ({ ...prev, [msg.id]: true }))
-                              );
-                            }}
+                            onPress={() => handleSaveMessage(msg.id, msg.text)}
                             disabled={Boolean(savedMessageIds[msg.id])}
                             className="flex-row items-center gap-1 rounded-full border border-[#DDD7CC] bg-[#FFFCF8] px-2.5 py-1.5 active:opacity-80 disabled:opacity-60"
                           >

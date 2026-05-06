@@ -5,11 +5,12 @@ import {
   type RelatedMemoryThumbnail,
   fetchRelatedMemoryThumbnails,
 } from "@/lib/fetchMemoryThumbnailUrls";
-import { saveChatOutput } from "@/lib/savedChatOutputs";
+import { saveChatOutput, suggestSavedChatOutputTitle } from "@/lib/savedChatOutputs";
 import { Ionicons } from "@expo/vector-icons";
 import { useRef, useState } from "react";
 import {
   ActivityIndicator,
+  Alert,
   KeyboardAvoidingView,
   Modal,
   PanResponder,
@@ -45,6 +46,29 @@ export function MiniChatWindow() {
   const startHeightRef = useRef(500);
   const minHeight = 280;
   const maxHeight = Math.max(minHeight, windowHeight - 100);
+
+  const handleSaveMessage = (messageId: string, messageText: string) => {
+    const saveWithTitle = (title?: string) => {
+      void saveChatOutput(messageText, { title }).then(() =>
+        setSavedMessageIds((prev) => ({ ...prev, [messageId]: true }))
+      );
+    };
+    const suggested = suggestSavedChatOutputTitle(messageText);
+    if (Platform.OS === "ios") {
+      Alert.prompt(
+        "Save note",
+        "Edit the title before saving.",
+        [
+          { text: "Cancel", style: "cancel" },
+          { text: "Save", onPress: (value) => saveWithTitle(value) },
+        ],
+        "plain-text",
+        suggested
+      );
+      return;
+    }
+    saveWithTitle(suggested);
+  };
 
   const resizePanResponder = useRef(
     PanResponder.create({
@@ -230,11 +254,7 @@ export function MiniChatWindow() {
                           <Pressable
                             accessibilityRole="button"
                             accessibilityLabel="Save chat output"
-                            onPress={() => {
-                              void saveChatOutput(msg.text).then(() =>
-                                setSavedMessageIds((prev) => ({ ...prev, [msg.id]: true }))
-                              );
-                            }}
+                            onPress={() => handleSaveMessage(msg.id, msg.text)}
                             disabled={Boolean(savedMessageIds[msg.id])}
                             className="flex-row items-center gap-1 rounded-full border border-[#DDD7CC] bg-[#FFFCF8] px-2 py-1 active:opacity-80 disabled:opacity-60"
                           >

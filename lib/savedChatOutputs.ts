@@ -15,6 +15,14 @@ function buildTitle(text: string): string {
   return first.length > 56 ? `${first.slice(0, 55)}…` : first;
 }
 
+export function suggestSavedChatOutputTitle(text: string): string {
+  return buildTitle(text);
+}
+
+function capTitle(title: string): string {
+  return title.length > 56 ? `${title.slice(0, 55)}…` : title;
+}
+
 function buildPreview(text: string): string {
   const flat = text.replace(/\s+/g, " ").trim();
   return flat.length > 180 ? `${flat.slice(0, 179)}…` : flat;
@@ -32,7 +40,10 @@ export async function loadSavedChatOutputs(): Promise<SavedChatOutput[]> {
   }
 }
 
-export async function saveChatOutput(text: string): Promise<SavedChatOutput[]> {
+export async function saveChatOutput(
+  text: string,
+  opts?: { title?: string }
+): Promise<SavedChatOutput[]> {
   const cleaned = text.trim();
   if (!cleaned) return loadSavedChatOutputs();
 
@@ -41,9 +52,10 @@ export async function saveChatOutput(text: string): Promise<SavedChatOutput[]> {
   if (dupe) return existing;
 
   const now = new Date().toISOString();
+  const preferredTitle = opts?.title?.trim() ?? "";
   const item: SavedChatOutput = {
     id: `saved-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-    title: buildTitle(cleaned),
+    title: preferredTitle ? capTitle(preferredTitle) : buildTitle(cleaned),
     preview: buildPreview(cleaned),
     created_at: now,
     full_text: cleaned,
@@ -57,6 +69,20 @@ export async function saveChatOutput(text: string): Promise<SavedChatOutput[]> {
 export async function removeSavedChatOutput(id: string): Promise<SavedChatOutput[]> {
   const existing = await loadSavedChatOutputs();
   const next = existing.filter((item) => item.id !== id);
+  await AsyncStorage.setItem(SAVED_CHAT_OUTPUTS_KEY, JSON.stringify(next));
+  return next;
+}
+
+export async function updateSavedChatOutputTitle(
+  id: string,
+  title: string
+): Promise<SavedChatOutput[]> {
+  const cleaned = title.trim();
+  if (!cleaned) return loadSavedChatOutputs();
+  const existing = await loadSavedChatOutputs();
+  const next = existing.map((item) =>
+    item.id === id ? { ...item, title: capTitle(cleaned) } : item
+  );
   await AsyncStorage.setItem(SAVED_CHAT_OUTPUTS_KEY, JSON.stringify(next));
   return next;
 }
