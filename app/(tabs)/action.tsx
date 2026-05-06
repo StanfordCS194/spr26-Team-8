@@ -1,8 +1,13 @@
 import { MarkdownishBoldLine, parseStructuredReply, splitConvoBubbles } from "@/components/MarkdownishBoldLine";
-import { exportChatTextToFile } from "@/lib/chatExport";
+import { RelatedLibraryPhotos } from "@/components/RelatedLibraryPhotos";
+import { copyChatOutput } from "@/lib/copyChatOutput";
+import {
+  type RelatedMemoryThumbnail,
+  fetchRelatedMemoryThumbnails,
+} from "@/lib/fetchMemoryThumbnailUrls";
 import { CHAT_PROMPTS, sendChatMessage } from "@/lib/chat";
 import { posthog } from "@/lib/posthog";
-import { saveChatOutput } from "@/lib/savedChatOutputs";
+import { saveChatOutput, suggestSavedChatOutputTitle } from "@/lib/savedChatOutputs";
 import { Ionicons } from "@expo/vector-icons";
 import { useFocusEffect } from "@react-navigation/native";
 import { router, useLocalSearchParams } from "expo-router";
@@ -29,6 +34,8 @@ type ChatMessage = {
   role: "user" | "assistant";
   text: string;
   imageUris?: string[];
+  /** Library thumbnails when the reply overlaps saved memory OCR/captions */
+  relatedLibraryImages?: RelatedMemoryThumbnail[];
 };
 type SelectedImage = {
   uri: string;
@@ -40,7 +47,7 @@ type SelectedImage = {
 function AssistantPlainBody({ content }: { content: string }) {
   const lines = content.split(/\n/);
   return (
-    <View className="gap-1.5">
+    <View className="w-full shrink-0 gap-1.5" collapsable={Platform.OS === "android" ? false : undefined}>
       {lines.map((raw, i) => {
         const line = raw.trimEnd();
         if (line.trim() === "") {
@@ -50,7 +57,7 @@ function AssistantPlainBody({ content }: { content: string }) {
           <MarkdownishBoldLine
             key={`ln-${i}`}
             line={line}
-            className="text-base leading-6 text-[#0B0B0B]"
+            className="w-full text-base leading-6 text-[#0B0B0B]"
             boldClassName="font-semibold"
           />
         );
@@ -64,24 +71,31 @@ function AssistantMessageBody({ content }: { content: string }) {
   if (!structured) return <AssistantPlainBody content={content} />;
 
   return (
-    <View className="gap-2.5">
+    <View className="shrink-0 gap-2.5" collapsable={Platform.OS === "android" ? false : undefined}>
       {structured.intro ? <AssistantPlainBody content={structured.intro} /> : null}
-      <View className="gap-2 border-l-2 border-[#E6E1DA] pl-3">
+      <View className="shrink-0 gap-2">
         {structured.items.map((item, i) => (
           <View
             key={`item-${i}-${item.title.slice(0, 24)}`}
-            className="flex-row items-start gap-1.5"
+            className="shrink-0 flex-row items-start gap-1.5"
+            collapsable={Platform.OS === "android" ? false : undefined}
           >
             <Text className="text-[15px] leading-[20px] font-semibold text-[#0B0B0B]">
               {i + 1}.
             </Text>
-            <View className="min-w-0 flex-1">
+            <View
+              style={{ flex: 1, minWidth: 0, flexShrink: 1 }}
+              collapsable={Platform.OS === "android" ? false : undefined}
+            >
               <MarkdownishBoldLine
                 line={`**${item.title}**`}
-                className="text-[15px] leading-[20px] text-[#0B0B0B]"
+                className="w-full text-[15px] leading-[22px] text-[#0B0B0B]"
                 boldClassName="font-semibold"
               />
-              <Text className="mt-0.5 text-[14px] leading-[20px] text-[#4A4540]">
+              <Text
+                className="mt-1 text-[14px] leading-[22px] text-[#4A4540]"
+                style={{ alignSelf: "stretch" }}
+              >
                 {item.body}
               </Text>
             </View>
@@ -106,16 +120,41 @@ export default function ActionTab() {
   const scrollRef = useRef<ScrollView>(null);
   const chatSessionId = useRef(`chat-${Date.now()}`).current;
 
+  const handleSaveMessage = useCallback((messageId: string, messageText: string) => {
+    const saveWithTitle = (title?: string) => {
+      void saveChatOutput(messageText, { title }).then(() =>
+        setSavedMessageIds((prev) => ({ ...prev, [messageId]: true }))
+      );
+    };
+    const suggested = suggestSavedChatOutputTitle(messageText);
+    if (Platform.OS === "ios") {
+      Alert.prompt(
+        "Save note",
+        "Edit the title before saving.",
+        [
+          { text: "Cancel", style: "cancel" },
+          { text: "Save", onPress: (value) => saveWithTitle(value) },
+        ],
+        "plain-text",
+        suggested
+      );
+      return;
+    }
+    saveWithTitle(suggested);
+  }, []);
+
   const makeMessage = useCallback(
     (
       role: "user" | "assistant",
       text: string,
-      imageUris?: string[]
+      imageUris?: string[],
+      relatedLibraryImages?: RelatedMemoryThumbnail[]
     ): ChatMessage => ({
       id: `${role}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       role,
       text,
       imageUris,
+      ...(relatedLibraryImages?.length ? { relatedLibraryImages } : {}),
     }),
     []
   );
@@ -158,8 +197,22 @@ export default function ActionTab() {
           ...(silent ? { style: "inbox_action_plan" as const } : {}),
           imageBase64s,
         });
-        const bubbles = parseStructuredReply(reply) ? [reply] : splitConvoBubbles(reply);
-        setMessages((m) => [...m, makeMessage("assistant", bubbles[0])]);
+        const relatedLibraryImages =
+          reply.relatedMemoryIds.length > 0
+            ? await fetchRelatedMemoryThumbnails(reply.relatedMemoryIds)
+            : [];
+        const bubbles = parseStructuredReply(reply.text)
+          ? [reply.text]
+          : splitConvoBubbles(reply.text);
+        setMessages((m) => [
+          ...m,
+          makeMessage(
+            "assistant",
+            bubbles[0],
+            undefined,
+            relatedLibraryImages.length ? relatedLibraryImages : undefined
+          ),
+        ]);
         for (let i = 1; i < bubbles.length; i += 1) {
           await new Promise((r) => setTimeout(r, 450));
           const text = bubbles[i];
@@ -283,21 +336,19 @@ export default function ActionTab() {
             <ScrollView
               ref={scrollRef}
               className="flex-1 px-5"
-              contentContainerClassName="pb-4"
+              removeClippedSubviews={false}
+              contentContainerStyle={{ flexGrow: 0, paddingBottom: 16 }}
               onContentSizeChange={() =>
                 scrollRef.current?.scrollToEnd({ animated: true })
               }
             >
-              {messages.map((msg) => (
-                <View
-                  key={msg.id}
-                  className={`mb-3 max-w-[92%] rounded-3xl px-4 py-3 ${
-                    msg.role === "user"
-                      ? "self-end bg-[#0B0B0B]"
-                      : "self-start border border-[#E6E1DA] bg-white shadow-sm"
-                  }`}
-                >
-                  {msg.role === "user" ? (
+              {messages.map((msg) =>
+                msg.role === "user" ? (
+                  <View
+                    key={msg.id}
+                    collapsable={Platform.OS === "android" ? false : undefined}
+                    className="mb-3 max-w-[92%] shrink-0 self-end rounded-3xl bg-[#0B0B0B] px-4 py-3"
+                  >
                     <View>
                       {msg.imageUris && msg.imageUris.length > 0 ? (
                         <View
@@ -317,39 +368,50 @@ export default function ActionTab() {
                         <Text className="text-base leading-6 text-white">{msg.text}</Text>
                       ) : null}
                     </View>
-                  ) : (
-                    <View>
-                      <AssistantMessageBody content={msg.text} />
-                      <View className="mt-2 flex-row justify-end">
-                        <View className="flex-row items-center gap-2">
+                  </View>
+                ) : (
+                  <View
+                    key={msg.id}
+                    collapsable={Platform.OS === "android" ? false : undefined}
+                    className="mb-3 w-full max-w-xs shrink-0 self-start rounded-3xl"
+                    style={
+                      Platform.OS === "ios"
+                        ? {
+                            shadowColor: "#000000",
+                            shadowOffset: { width: 0, height: 1 },
+                            shadowOpacity: 0.06,
+                            shadowRadius: 4,
+                          }
+                        : Platform.OS === "android"
+                          ? { elevation: 2 }
+                          : undefined
+                    }
+                  >
+                    <View
+                      collapsable={Platform.OS === "android" ? false : undefined}
+                      className="w-full shrink-0 overflow-hidden rounded-3xl border border-[#E6E1DA] bg-white px-5 pt-4 pb-6"
+                    >
+                      <View className="w-full shrink-0 pb-6">
+                        <AssistantMessageBody content={msg.text} />
+                        <RelatedLibraryPhotos items={msg.relatedLibraryImages ?? []} />
+                      </View>
+                      <View className="mt-1 w-full shrink-0 border-t border-[#EDE8DF] pt-5">
+                        <View className="shrink-0 flex-row flex-wrap justify-end gap-4">
                           <Pressable
                             accessibilityRole="button"
-                            accessibilityLabel="Download chat output"
-                            onPress={() => {
-                              void exportChatTextToFile(msg.text, msg.text)
-                                .then(() => Alert.alert("Download", "Use the share sheet to save this to Files."))
-                                .catch((err) =>
-                                  Alert.alert(
-                                    "Download failed",
-                                    err instanceof Error ? err.message : "Could not export output."
-                                  )
-                                );
-                            }}
-                            className="flex-row items-center gap-1 rounded-full border border-[#E6E1DA] bg-[#FFFCF8] px-2.5 py-1.5 active:opacity-80"
+                            accessibilityLabel="Copy chat output"
+                            onPress={() => void copyChatOutput(msg.text)}
+                            className="flex-row items-center gap-1 rounded-full border border-[#DDD7CC] bg-[#FFFCF8] px-2.5 py-1.5 active:opacity-80"
                           >
-                            <Ionicons name="download-outline" size={14} color="#0B0B0B" />
-                            <Text className="text-xs font-semibold text-[#0B0B0B]">Download</Text>
+                            <Ionicons name="copy-outline" size={14} color="#0B0B0B" />
+                            <Text className="text-xs font-semibold text-[#0B0B0B]">Copy</Text>
                           </Pressable>
                           <Pressable
                             accessibilityRole="button"
                             accessibilityLabel="Save chat output"
-                            onPress={() => {
-                              void saveChatOutput(msg.text).then(() =>
-                                setSavedMessageIds((prev) => ({ ...prev, [msg.id]: true }))
-                              );
-                            }}
+                            onPress={() => handleSaveMessage(msg.id, msg.text)}
                             disabled={Boolean(savedMessageIds[msg.id])}
-                            className="flex-row items-center gap-1 rounded-full border border-[#E6E1DA] bg-[#FFFCF8] px-2.5 py-1.5 active:opacity-80 disabled:opacity-60"
+                            className="flex-row items-center gap-1 rounded-full border border-[#DDD7CC] bg-[#FFFCF8] px-2.5 py-1.5 active:opacity-80 disabled:opacity-60"
                           >
                             <Ionicons
                               name={savedMessageIds[msg.id] ? "bookmark" : "bookmark-outline"}
@@ -363,9 +425,9 @@ export default function ActionTab() {
                         </View>
                       </View>
                     </View>
-                  )}
-                </View>
-              ))}
+                  </View>
+                )
+              )}
               {sending ? (
                 <View className="flex-row items-center gap-2 py-2">
                   <ActivityIndicator size="small" color="#0B0B0B" />

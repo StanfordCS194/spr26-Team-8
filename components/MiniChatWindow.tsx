@@ -1,6 +1,11 @@
+import { RelatedLibraryPhotos } from "@/components/RelatedLibraryPhotos";
 import { sendChatMessage } from "@/lib/chat";
-import { exportChatTextToFile } from "@/lib/chatExport";
-import { saveChatOutput } from "@/lib/savedChatOutputs";
+import { copyChatOutput } from "@/lib/copyChatOutput";
+import {
+  type RelatedMemoryThumbnail,
+  fetchRelatedMemoryThumbnails,
+} from "@/lib/fetchMemoryThumbnailUrls";
+import { saveChatOutput, suggestSavedChatOutputTitle } from "@/lib/savedChatOutputs";
 import { Ionicons } from "@expo/vector-icons";
 import { useRef, useState } from "react";
 import {
@@ -18,7 +23,12 @@ import {
   View,
 } from "react-native";
 
-type ChatMessage = { id: string; role: "user" | "assistant"; text: string };
+type ChatMessage = {
+  id: string;
+  role: "user" | "assistant";
+  text: string;
+  relatedLibraryImages?: RelatedMemoryThumbnail[];
+};
 const MINI_CHAT_STARTER_PROMPTS = [
   "Create a bucket list for this weekend",
   "Draft a short weekend itinerary",
@@ -36,6 +46,29 @@ export function MiniChatWindow() {
   const startHeightRef = useRef(500);
   const minHeight = 280;
   const maxHeight = Math.max(minHeight, windowHeight - 100);
+
+  const handleSaveMessage = (messageId: string, messageText: string) => {
+    const saveWithTitle = (title?: string) => {
+      void saveChatOutput(messageText, { title }).then(() =>
+        setSavedMessageIds((prev) => ({ ...prev, [messageId]: true }))
+      );
+    };
+    const suggested = suggestSavedChatOutputTitle(messageText);
+    if (Platform.OS === "ios") {
+      Alert.prompt(
+        "Save note",
+        "Edit the title before saving.",
+        [
+          { text: "Cancel", style: "cancel" },
+          { text: "Save", onPress: (value) => saveWithTitle(value) },
+        ],
+        "plain-text",
+        suggested
+      );
+      return;
+    }
+    saveWithTitle(suggested);
+  };
 
   const resizePanResponder = useRef(
     PanResponder.create({
@@ -69,12 +102,17 @@ export function MiniChatWindow() {
     ]);
     try {
       const reply = await sendChatMessage(trimmed);
+      const relatedLibraryImages =
+        reply.relatedMemoryIds.length > 0
+          ? await fetchRelatedMemoryThumbnails(reply.relatedMemoryIds)
+          : [];
       setMessages((m) => [
         ...m,
         {
           id: `assistant-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
           role: "assistant",
-          text: reply,
+          text: reply.text,
+          ...(relatedLibraryImages.length ? { relatedLibraryImages } : {}),
         },
       ]);
     } catch (err) {
@@ -140,7 +178,8 @@ export function MiniChatWindow() {
             <ScrollView
               ref={scrollRef}
               className="flex-1 px-4 pt-3"
-              contentContainerClassName="pb-4"
+              removeClippedSubviews={false}
+              contentContainerStyle={{ flexGrow: 0, paddingBottom: 16 }}
               keyboardShouldPersistTaps="handled"
               keyboardDismissMode="on-drag"
             >
@@ -165,66 +204,75 @@ export function MiniChatWindow() {
                   </View>
                 </View>
               ) : null}
-              {messages.map((msg, i) => (
-                <View
-                  key={msg.id}
-                  className={`mb-2.5 max-w-[92%] rounded-2xl px-3.5 py-2.5 ${
-                    msg.role === "user"
-                      ? "self-end bg-[#0B0B0B]"
-                      : "self-start border border-[#E6E1DA] bg-white"
-                  }`}
-                >
-                  <Text
-                    className={`text-sm leading-5 ${msg.role === "user" ? "text-white" : "text-[#0B0B0B]"}`}
+              {messages.map((msg) =>
+                msg.role === "user" ? (
+                  <View
+                    key={msg.id}
+                    className="mb-2.5 max-w-[92%] shrink-0 self-end rounded-2xl bg-[#0B0B0B] px-3.5 py-2.5"
                   >
-                    {msg.text}
-                  </Text>
-                  {msg.role === "assistant" ? (
-                    <View className="mt-2 flex-row justify-end">
-                      <View className="flex-row items-center gap-2">
-                        <Pressable
-                          accessibilityRole="button"
-                          accessibilityLabel="Download chat output"
-                          onPress={() => {
-                            void exportChatTextToFile(msg.text, msg.text)
-                              .then(() => Alert.alert("Download", "Use the share sheet to save this to Files."))
-                              .catch((err) =>
-                                Alert.alert(
-                                  "Download failed",
-                                  err instanceof Error ? err.message : "Could not export output."
-                                )
-                              );
-                          }}
-                          className="flex-row items-center gap-1 rounded-full border border-[#E6E1DA] bg-[#FFFCF8] px-2 py-1 active:opacity-80"
-                        >
-                          <Ionicons name="download-outline" size={12} color="#0B0B0B" />
-                          <Text className="text-[11px] font-semibold text-[#0B0B0B]">Download</Text>
-                        </Pressable>
-                        <Pressable
-                          accessibilityRole="button"
-                          accessibilityLabel="Save chat output"
-                          onPress={() => {
-                            void saveChatOutput(msg.text).then(() =>
-                              setSavedMessageIds((prev) => ({ ...prev, [msg.id]: true }))
-                            );
-                          }}
-                          disabled={Boolean(savedMessageIds[msg.id])}
-                          className="flex-row items-center gap-1 rounded-full border border-[#E6E1DA] bg-[#FFFCF8] px-2 py-1 active:opacity-80 disabled:opacity-60"
-                        >
-                          <Ionicons
-                            name={savedMessageIds[msg.id] ? "bookmark" : "bookmark-outline"}
-                            size={12}
-                            color="#0B0B0B"
-                          />
-                          <Text className="text-[11px] font-semibold text-[#0B0B0B]">
-                            {savedMessageIds[msg.id] ? "Saved" : "Save"}
-                          </Text>
-                        </Pressable>
+                    <Text className="text-sm leading-5 text-white">{msg.text}</Text>
+                  </View>
+                ) : (
+                  <View
+                    key={msg.id}
+                    collapsable={Platform.OS === "android" ? false : undefined}
+                    className="mb-2.5 w-full max-w-xs shrink-0 self-start rounded-2xl"
+                    style={
+                      Platform.OS === "ios"
+                        ? {
+                            shadowColor: "#000000",
+                            shadowOffset: { width: 0, height: 1 },
+                            shadowOpacity: 0.05,
+                            shadowRadius: 3,
+                          }
+                        : Platform.OS === "android"
+                          ? { elevation: 2 }
+                          : undefined
+                    }
+                  >
+                    <View
+                      collapsable={Platform.OS === "android" ? false : undefined}
+                      className="w-full shrink-0 overflow-hidden rounded-2xl border border-[#E6E1DA] bg-white px-5 pt-3 pb-5"
+                    >
+                      <View className="w-full shrink-0 pb-5">
+                        <Text className="text-sm leading-5 text-[#0B0B0B]" style={{ alignSelf: "stretch" }}>
+                          {msg.text}
+                        </Text>
+                        <RelatedLibraryPhotos items={msg.relatedLibraryImages ?? []} />
+                      </View>
+                      <View className="mt-1 w-full shrink-0 border-t border-[#EDE8DF] pt-5">
+                        <View className="shrink-0 flex-row flex-wrap justify-end gap-4">
+                          <Pressable
+                            accessibilityRole="button"
+                            accessibilityLabel="Copy chat output"
+                            onPress={() => void copyChatOutput(msg.text)}
+                            className="flex-row items-center gap-1 rounded-full border border-[#DDD7CC] bg-[#FFFCF8] px-2 py-1 active:opacity-80"
+                          >
+                            <Ionicons name="copy-outline" size={12} color="#0B0B0B" />
+                            <Text className="text-[11px] font-semibold text-[#0B0B0B]">Copy</Text>
+                          </Pressable>
+                          <Pressable
+                            accessibilityRole="button"
+                            accessibilityLabel="Save chat output"
+                            onPress={() => handleSaveMessage(msg.id, msg.text)}
+                            disabled={Boolean(savedMessageIds[msg.id])}
+                            className="flex-row items-center gap-1 rounded-full border border-[#DDD7CC] bg-[#FFFCF8] px-2 py-1 active:opacity-80 disabled:opacity-60"
+                          >
+                            <Ionicons
+                              name={savedMessageIds[msg.id] ? "bookmark" : "bookmark-outline"}
+                              size={12}
+                              color="#0B0B0B"
+                            />
+                            <Text className="text-[11px] font-semibold text-[#0B0B0B]">
+                              {savedMessageIds[msg.id] ? "Saved" : "Save"}
+                            </Text>
+                          </Pressable>
+                        </View>
                       </View>
                     </View>
-                  ) : null}
-                </View>
-              ))}
+                  </View>
+                )
+              )}
               {sending ? (
                 <View className="flex-row items-center gap-2 py-1">
                   <ActivityIndicator size="small" color="#0B0B0B" />
