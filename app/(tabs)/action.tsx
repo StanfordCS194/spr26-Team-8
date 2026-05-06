@@ -40,7 +40,7 @@ type SelectedImage = {
 function AssistantPlainBody({ content }: { content: string }) {
   const lines = content.split(/\n/);
   return (
-    <View className="shrink-0 gap-1.5" collapsable={Platform.OS === "android" ? false : undefined}>
+    <View className="w-full shrink-0 gap-1.5" collapsable={Platform.OS === "android" ? false : undefined}>
       {lines.map((raw, i) => {
         const line = raw.trimEnd();
         if (line.trim() === "") {
@@ -50,7 +50,7 @@ function AssistantPlainBody({ content }: { content: string }) {
           <MarkdownishBoldLine
             key={`ln-${i}`}
             line={line}
-            className="text-base leading-6 text-[#0B0B0B]"
+            className="w-full text-base leading-6 text-[#0B0B0B]"
             boldClassName="font-semibold"
           />
         );
@@ -77,15 +77,18 @@ function AssistantMessageBody({ content }: { content: string }) {
               {i + 1}.
             </Text>
             <View
-              style={{ flexGrow: 1, flexShrink: 0, minWidth: 0 }}
+              style={{ flex: 1, minWidth: 0, flexShrink: 1 }}
               collapsable={Platform.OS === "android" ? false : undefined}
             >
               <MarkdownishBoldLine
                 line={`**${item.title}**`}
-                className="text-[15px] leading-[20px] text-[#0B0B0B]"
+                className="w-full text-[15px] leading-[22px] text-[#0B0B0B]"
                 boldClassName="font-semibold"
               />
-              <Text className="mt-0.5 text-[14px] leading-[20px] text-[#4A4540]">
+              <Text
+                className="mt-1 text-[14px] leading-[22px] text-[#4A4540]"
+                style={{ alignSelf: "stretch" }}
+              >
                 {item.body}
               </Text>
             </View>
@@ -287,6 +290,7 @@ export default function ActionTab() {
             <ScrollView
               ref={scrollRef}
               className="flex-1 px-5"
+              removeClippedSubviews={false}
               contentContainerStyle={{ flexGrow: 0, paddingBottom: 16 }}
               onContentSizeChange={() =>
                 scrollRef.current?.scrollToEnd({ animated: true })
@@ -323,7 +327,7 @@ export default function ActionTab() {
                   <View
                     key={msg.id}
                     collapsable={Platform.OS === "android" ? false : undefined}
-                    className="mb-3 max-w-[85%] shrink-0 self-start rounded-3xl"
+                    className="mb-3 w-full max-w-xs shrink-0 self-start rounded-3xl"
                     style={
                       Platform.OS === "ios"
                         ? {
@@ -332,25 +336,20 @@ export default function ActionTab() {
                             shadowOpacity: 0.06,
                             shadowRadius: 4,
                           }
-                        : undefined
+                        : Platform.OS === "android"
+                          ? { elevation: 2 }
+                          : undefined
                     }
                   >
                     <View
                       collapsable={Platform.OS === "android" ? false : undefined}
-                      className="w-full shrink-0 overflow-hidden rounded-3xl border border-[#E6E1DA] bg-white px-5 py-3"
-                      style={
-                        Platform.OS === "android"
-                          ? {
-                              elevation: 2,
-                            }
-                          : undefined
-                      }
+                      className="w-full shrink-0 overflow-hidden rounded-3xl border border-[#E6E1DA] bg-white px-5 pt-4 pb-6"
                     >
-                      <View className="w-full shrink-0">
+                      <View className="w-full shrink-0 pb-6">
                         <AssistantMessageBody content={msg.text} />
                       </View>
-                      <View className="mt-4 w-full shrink-0 border-t border-[#EDE8DF] pt-3">
-                        <View className="shrink-0 flex-row justify-end gap-2">
+                      <View className="mt-1 w-full shrink-0 border-t border-[#EDE8DF] pt-5">
+                        <View className="shrink-0 flex-row flex-wrap justify-end gap-4">
                           <Pressable
                             accessibilityRole="button"
                             accessibilityLabel="Download chat output"

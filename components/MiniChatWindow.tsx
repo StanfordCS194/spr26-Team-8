@@ -140,6 +140,7 @@ export function MiniChatWindow() {
             <ScrollView
               ref={scrollRef}
               className="flex-1 px-4 pt-3"
+              removeClippedSubviews={false}
               contentContainerStyle={{ flexGrow: 0, paddingBottom: 16 }}
               keyboardShouldPersistTaps="handled"
               keyboardDismissMode="on-drag"
@@ -177,7 +178,7 @@ export function MiniChatWindow() {
                   <View
                     key={msg.id}
                     collapsable={Platform.OS === "android" ? false : undefined}
-                    className="mb-2.5 max-w-[85%] shrink-0 self-start rounded-2xl"
+                    className="mb-2.5 w-full max-w-xs shrink-0 self-start rounded-2xl"
                     style={
                       Platform.OS === "ios"
                         ? {
@@ -186,25 +187,22 @@ export function MiniChatWindow() {
                             shadowOpacity: 0.05,
                             shadowRadius: 3,
                           }
-                        : undefined
+                        : Platform.OS === "android"
+                          ? { elevation: 2 }
+                          : undefined
                     }
                   >
                     <View
                       collapsable={Platform.OS === "android" ? false : undefined}
-                      className="w-full shrink-0 overflow-hidden rounded-2xl border border-[#E6E1DA] bg-white px-5 py-2.5"
-                      style={
-                        Platform.OS === "android"
-                          ? {
-                              elevation: 2,
-                            }
-                          : undefined
-                      }
+                      className="w-full shrink-0 overflow-hidden rounded-2xl border border-[#E6E1DA] bg-white px-5 pt-3 pb-5"
                     >
-                      <View className="w-full shrink-0">
-                        <Text className="text-sm leading-5 text-[#0B0B0B]">{msg.text}</Text>
+                      <View className="w-full shrink-0 pb-5">
+                        <Text className="text-sm leading-5 text-[#0B0B0B]" style={{ alignSelf: "stretch" }}>
+                          {msg.text}
+                        </Text>
                       </View>
-                      <View className="mt-4 w-full shrink-0 border-t border-[#EDE8DF] pt-3">
-                        <View className="shrink-0 flex-row justify-end gap-2">
+                      <View className="mt-1 w-full shrink-0 border-t border-[#EDE8DF] pt-5">
+                        <View className="shrink-0 flex-row flex-wrap justify-end gap-4">
                           <Pressable
                             accessibilityRole="button"
                             accessibilityLabel="Download chat output"
