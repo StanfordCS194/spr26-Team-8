@@ -3,6 +3,7 @@
  * the user's recent OCR memory descriptions as grounding context.
  */
 
+import { pickRelatedMemoryIds } from "@/lib/chatRelatedMemories";
 import { supabase } from "@/lib/supabase";
 import { logChatMessage } from "@/lib/chatLog";
 
@@ -135,12 +136,19 @@ export const CHAT_PROMPTS = [
 
 export type ChatResponseStyle = "default" | "inbox_action_plan";
 
+export type ChatMessageReply = {
+  text: string;
+  /** Memories whose OCR/caption text overlaps the assistant reply — thumbnails can link to Library. */
+  relatedMemoryIds: string[];
+};
+
 export async function sendChatMessage(
   userText: string,
   options?: { style?: ChatResponseStyle; imageBase64s?: string[] }
-): Promise<string> {
+): Promise<ChatMessageReply> {
   if (!USE_GENERATIVE_CHAT_API) {
-    return `Echo: ${userText.trim() || "(empty)"}`;
+    const t = userText.trim() || "(empty)";
+    return { text: `Echo: ${t}`, relatedMemoryIds: [] };
   }
   const apiKey = process.env.EXPO_PUBLIC_OPENAI_API_KEY?.trim();
   if (!apiKey) {
@@ -173,6 +181,17 @@ export async function sendChatMessage(
     return mb.localeCompare(ma);
   });
 
+  const memoryCandidates = sortedRows
+    .filter((r) => r.memory_id != null && String(r.memory_id).length > 0)
+    .map((row) => ({
+      memory_id: String(row.memory_id),
+      haystack: [row.want_to_do, row.user_caption, row.ocr_description]
+        .map((x) => (typeof x === "string" ? x.trim() : ""))
+        .filter(Boolean)
+        .join(" "),
+    }))
+    .filter((c) => c.haystack.trim().length > 0);
+
   const snippets = sortedRows.map((row) => {
     const parts = [row.want_to_do, row.user_caption, row.ocr_description]
       .map((x) => (typeof x === "string" ? x.trim() : ""))
@@ -203,7 +222,8 @@ export async function sendChatMessage(
   const systemPromptDefault =
     "You are Venn, a planning assistant. Reply like a friend texting based on the user's memory snippets, requests, and attached files — short and warm.\n" +
     memoryDiscipline +
-    "\n\nDefault: 1–2 sentences, ≤25 words. For 2 sentences, split into 2 bubbles separated by a blank line. No upsell, no follow-up offers.\n\n" +
+    "\n\nWhen your tips clearly mirror events or places from the snippets (festivals, food spots, games, trips mentioned there), stay grounded in those same phrases.\n\n" +
+    "Default: 1–2 sentences, ≤25 words. For 2 sentences, split into 2 bubbles separated by a blank line. No upsell, no follow-up offers.\n\n" +
     "For lists, itineraries, plans, or 3+ distinct items, use this format:\n" +
     "  one framing sentence\n\n" +
     "  N. **Title** — short body\n" +
@@ -267,5 +287,7 @@ export async function sendChatMessage(
 
   void logChatMessage(userId, "assistant", content);
 
-  return content;
+  const relatedMemoryIds = pickRelatedMemoryIds(content, memoryCandidates);
+
+  return { text: content, relatedMemoryIds };
 }

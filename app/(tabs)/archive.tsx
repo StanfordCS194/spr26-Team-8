@@ -36,6 +36,7 @@ import * as FileSystem from "expo-file-system/legacy";
 import { Image } from "expo-image";
 import * as ImageManipulator from "expo-image-manipulator";
 import * as ImagePicker from "expo-image-picker";
+import { router, useLocalSearchParams } from "expo-router";
 import { useIncomingShare } from "expo-sharing";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -118,8 +119,17 @@ const searchInputStyles = StyleSheet.create({
   },
 });
 
+function normalizeSingleParam(v: string | string[] | undefined): string | undefined {
+  if (typeof v === "string") return v;
+  if (Array.isArray(v) && typeof v[0] === "string") return v[0];
+  return undefined;
+}
+
 export default function ArchiveTab() {
+  const archiveParams = useLocalSearchParams<{ openMemoryId?: string | string[] }>();
+  const pendingOpenMemoryId = normalizeSingleParam(archiveParams.openMemoryId)?.trim();
   const [items, setItems] = useState<BoardItem[]>([]);
+  const [archiveLoadGeneration, setArchiveLoadGeneration] = useState(0);
   const [meta, setMeta] = useState<Record<string, ArchiveItemMeta>>({});
   const [themeOverrides, setThemeOverrides] = useState<Record<string, string>>({});
   const [searchQuery, setSearchQuery] = useState("");
@@ -195,108 +205,119 @@ export default function ArchiveTab() {
   }, [clearSharedPayloads, refreshSharePayloads, resolvedSharedPayloads]);
 
   const loadItems = useCallback(async () => {
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return setItems([]);
-
-    // first time we see this user this session, pull their saved URL cache off disk so cold starts can hit the cache
-    if (cachedUserIdRef.current !== user.id) {
-      signedUrlCacheRef.current = await loadSignedUrlCache(user.id);
-      cachedUserIdRef.current = user.id;
-    }
-
-    const SEL_FULL =
-      "memory_id, want_to_do, ocr_description, user_caption, files(storage_path, file_name)";
-    const SEL_LEGACY =
-      "memory_id, ocr_description, user_caption, files(storage_path, file_name)";
-
-    const fullRes = await supabase
-      .from("memories")
-      .select(SEL_FULL)
-      .eq("user_id", user.id)
-      .not("file_id", "is", null)
-      .order("memory_id", { ascending: true });
-
-    const rowsRes =
-      fullRes.error && isUndefinedColumnError(fullRes.error, "want_to_do")
-        ? await supabase
-            .from("memories")
-            .select(SEL_LEGACY)
-            .eq("user_id", user.id)
-            .not("file_id", "is", null)
-            .order("memory_id", { ascending: true })
-        : fullRes;
-
-    if (rowsRes.error) {
-      if (__DEV__) console.warn("[archive] memories load:", rowsRes.error.message);
-      return setItems([]);
-    }
-
-    const data = rowsRes.data;
-
-    const entries = ((data as MemoryFileRow[] | null) ?? []).flatMap((m) => {
-      const file = Array.isArray(m.files) ? m.files[0] : m.files;
-      if (!file) return [];
-      const want = m.want_to_do?.trim() ?? "";
-      const ocr = m.ocr_description?.trim() ?? "";
-      const cap = m.user_caption?.trim() ?? "";
-      const serverSearchText = [want, ocr, cap].filter(Boolean).join(" ");
-      return [
-        {
-          memory_id: m.memory_id,
-          storage_path: file.storage_path,
-          searchFileName: file.file_name,
-          serverSearchText,
-        },
-      ];
-    });
-    if (entries.length === 0) return setItems([]);
-
-    // long TTL. anything shorter and images vanish when the URL expires mid-session
-    const SIGNED_URL_TTL_SEC = 60 * 60 * 24 * 7;
-    // only refresh URLs that are about to expire. keeps strings stable so the cache hits
-    const REFRESH_THRESHOLD_MS = 24 * 60 * 60 * 1000;
-
-    const now = Date.now();
-    const pathsNeedingSignedUrl: string[] = [];
-    for (const e of entries) {
-      const cached = signedUrlCacheRef.current.get(e.storage_path);
-      if (!cached || cached.expiresAt - now < REFRESH_THRESHOLD_MS) {
-        pathsNeedingSignedUrl.push(e.storage_path);
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) {
+        setItems([]);
+        return;
       }
-    }
 
-    let cacheChanged = false;
-    if (pathsNeedingSignedUrl.length > 0) {
-      const { data: signed } = await supabase.storage
+      // first time we see this user this session, pull their saved URL cache off disk so cold starts can hit the cache
+      if (cachedUserIdRef.current !== user.id) {
+        signedUrlCacheRef.current = await loadSignedUrlCache(user.id);
+        cachedUserIdRef.current = user.id;
+      }
+
+      const SEL_FULL =
+        "memory_id, want_to_do, ocr_description, user_caption, files(storage_path, file_name)";
+      const SEL_LEGACY =
+        "memory_id, ocr_description, user_caption, files(storage_path, file_name)";
+
+      const fullRes = await supabase
         .from("memories")
-        .createSignedUrls(pathsNeedingSignedUrl, SIGNED_URL_TTL_SEC);
-      const expiresAt = now + SIGNED_URL_TTL_SEC * 1000;
-      for (const s of signed ?? []) {
-        if (s.signedUrl && s.path) {
-          signedUrlCacheRef.current.set(s.path, { url: s.signedUrl, expiresAt });
-          cacheChanged = true;
-        }
-      }
-    }
+        .select(SEL_FULL)
+        .eq("user_id", user.id)
+        .not("file_id", "is", null)
+        .order("memory_id", { ascending: true });
 
-    setItems(
-      entries.flatMap((e, i) => {
-        const cached = signedUrlCacheRef.current.get(e.storage_path);
-        if (!cached) return [];
+      const rowsRes =
+        fullRes.error && isUndefinedColumnError(fullRes.error, "want_to_do")
+          ? await supabase
+              .from("memories")
+              .select(SEL_LEGACY)
+              .eq("user_id", user.id)
+              .not("file_id", "is", null)
+              .order("memory_id", { ascending: true })
+          : fullRes;
+
+      if (rowsRes.error) {
+        if (__DEV__) console.warn("[archive] memories load:", rowsRes.error.message);
+        setItems([]);
+        return;
+      }
+
+      const data = rowsRes.data;
+
+      const entries = ((data as MemoryFileRow[] | null) ?? []).flatMap((m) => {
+        const file = Array.isArray(m.files) ? m.files[0] : m.files;
+        if (!file) return [];
+        const want = m.want_to_do?.trim() ?? "";
+        const ocr = m.ocr_description?.trim() ?? "";
+        const cap = m.user_caption?.trim() ?? "";
+        const serverSearchText = [want, ocr, cap].filter(Boolean).join(" ");
         return [
           {
-            id: `uploaded-${e.memory_id}`,
-            source: { uri: cached.url },
-            height: imageHeights[i % imageHeights.length],
-            searchFileName: e.searchFileName,
-            serverSearchText: e.serverSearchText,
+            memory_id: m.memory_id,
+            storage_path: file.storage_path,
+            searchFileName: file.file_name,
+            serverSearchText,
           },
         ];
-      })
-    );
+      });
+      if (entries.length === 0) {
+        setItems([]);
+        return;
+      }
 
-    // persist new URLs to disk so the next cold start can reuse them
-    if (cacheChanged) void saveSignedUrlCache(user.id, signedUrlCacheRef.current);
+      // long TTL. anything shorter and images vanish when the URL expires mid-session
+      const SIGNED_URL_TTL_SEC = 60 * 60 * 24 * 7;
+      // only refresh URLs that are about to expire. keeps strings stable so the cache hits
+      const REFRESH_THRESHOLD_MS = 24 * 60 * 60 * 1000;
+
+      const now = Date.now();
+      const pathsNeedingSignedUrl: string[] = [];
+      for (const e of entries) {
+        const cached = signedUrlCacheRef.current.get(e.storage_path);
+        if (!cached || cached.expiresAt - now < REFRESH_THRESHOLD_MS) {
+          pathsNeedingSignedUrl.push(e.storage_path);
+        }
+      }
+
+      let cacheChanged = false;
+      if (pathsNeedingSignedUrl.length > 0) {
+        const { data: signed } = await supabase.storage
+          .from("memories")
+          .createSignedUrls(pathsNeedingSignedUrl, SIGNED_URL_TTL_SEC);
+        const expiresAt = now + SIGNED_URL_TTL_SEC * 1000;
+        for (const s of signed ?? []) {
+          if (s.signedUrl && s.path) {
+            signedUrlCacheRef.current.set(s.path, { url: s.signedUrl, expiresAt });
+            cacheChanged = true;
+          }
+        }
+      }
+
+      setItems(
+        entries.flatMap((e, i) => {
+          const cached = signedUrlCacheRef.current.get(e.storage_path);
+          if (!cached) return [];
+          return [
+            {
+              id: `uploaded-${e.memory_id}`,
+              source: { uri: cached.url },
+              height: imageHeights[i % imageHeights.length],
+              searchFileName: e.searchFileName,
+              serverSearchText: e.serverSearchText,
+            },
+          ];
+        })
+      );
+
+      // persist new URLs to disk so the next cold start can reuse them
+      if (cacheChanged) void saveSignedUrlCache(user.id, signedUrlCacheRef.current);
+    } finally {
+      setArchiveLoadGeneration((g) => g + 1);
+    }
   }, []);
 
   // skip the reload if we just did one. pass force=true to override (pull-to-refresh, sign-in)
@@ -336,6 +357,15 @@ export default function ArchiveTab() {
       void loadItemsIfStale();
     }, [loadItemsIfStale])
   );
+
+  useEffect(() => {
+    if (!pendingOpenMemoryId) return;
+    if (archiveLoadGeneration === 0) return;
+    const targetId = `uploaded-${pendingOpenMemoryId}`;
+    const item = items.find((i) => i.id === targetId);
+    if (item) setSelectedItem(item);
+    router.setParams({ openMemoryId: undefined });
+  }, [pendingOpenMemoryId, items, archiveLoadGeneration]);
 
   // no AppState listener. used to re-download every photo on every app foreground
 

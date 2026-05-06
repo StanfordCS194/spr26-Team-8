@@ -1,11 +1,15 @@
+import { RelatedLibraryPhotos } from "@/components/RelatedLibraryPhotos";
 import { sendChatMessage } from "@/lib/chat";
 import { copyChatOutput } from "@/lib/copyChatOutput";
+import {
+  type RelatedMemoryThumbnail,
+  fetchRelatedMemoryThumbnails,
+} from "@/lib/fetchMemoryThumbnailUrls";
 import { saveChatOutput } from "@/lib/savedChatOutputs";
 import { Ionicons } from "@expo/vector-icons";
 import { useRef, useState } from "react";
 import {
   ActivityIndicator,
-  Alert,
   KeyboardAvoidingView,
   Modal,
   PanResponder,
@@ -18,7 +22,12 @@ import {
   View,
 } from "react-native";
 
-type ChatMessage = { id: string; role: "user" | "assistant"; text: string };
+type ChatMessage = {
+  id: string;
+  role: "user" | "assistant";
+  text: string;
+  relatedLibraryImages?: RelatedMemoryThumbnail[];
+};
 const MINI_CHAT_STARTER_PROMPTS = [
   "Create a bucket list for this weekend",
   "Draft a short weekend itinerary",
@@ -69,12 +78,17 @@ export function MiniChatWindow() {
     ]);
     try {
       const reply = await sendChatMessage(trimmed);
+      const relatedLibraryImages =
+        reply.relatedMemoryIds.length > 0
+          ? await fetchRelatedMemoryThumbnails(reply.relatedMemoryIds)
+          : [];
       setMessages((m) => [
         ...m,
         {
           id: `assistant-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
           role: "assistant",
-          text: reply,
+          text: reply.text,
+          ...(relatedLibraryImages.length ? { relatedLibraryImages } : {}),
         },
       ]);
     } catch (err) {
@@ -200,6 +214,7 @@ export function MiniChatWindow() {
                         <Text className="text-sm leading-5 text-[#0B0B0B]" style={{ alignSelf: "stretch" }}>
                           {msg.text}
                         </Text>
+                        <RelatedLibraryPhotos items={msg.relatedLibraryImages ?? []} />
                       </View>
                       <View className="mt-1 w-full shrink-0 border-t border-[#EDE8DF] pt-5">
                         <View className="shrink-0 flex-row flex-wrap justify-end gap-4">

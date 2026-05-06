@@ -1,5 +1,10 @@
 import { MarkdownishBoldLine, parseStructuredReply, splitConvoBubbles } from "@/components/MarkdownishBoldLine";
+import { RelatedLibraryPhotos } from "@/components/RelatedLibraryPhotos";
 import { copyChatOutput } from "@/lib/copyChatOutput";
+import {
+  type RelatedMemoryThumbnail,
+  fetchRelatedMemoryThumbnails,
+} from "@/lib/fetchMemoryThumbnailUrls";
 import { CHAT_PROMPTS, sendChatMessage } from "@/lib/chat";
 import { posthog } from "@/lib/posthog";
 import { saveChatOutput } from "@/lib/savedChatOutputs";
@@ -13,7 +18,6 @@ import { ImageManipulator, SaveFormat } from "expo-image-manipulator";
 import * as ImagePicker from "expo-image-picker";
 import {
   ActivityIndicator,
-  Alert,
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -29,6 +33,8 @@ type ChatMessage = {
   role: "user" | "assistant";
   text: string;
   imageUris?: string[];
+  /** Library thumbnails when the reply overlaps saved memory OCR/captions */
+  relatedLibraryImages?: RelatedMemoryThumbnail[];
 };
 type SelectedImage = {
   uri: string;
@@ -117,12 +123,14 @@ export default function ActionTab() {
     (
       role: "user" | "assistant",
       text: string,
-      imageUris?: string[]
+      imageUris?: string[],
+      relatedLibraryImages?: RelatedMemoryThumbnail[]
     ): ChatMessage => ({
       id: `${role}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       role,
       text,
       imageUris,
+      ...(relatedLibraryImages?.length ? { relatedLibraryImages } : {}),
     }),
     []
   );
@@ -165,8 +173,22 @@ export default function ActionTab() {
           ...(silent ? { style: "inbox_action_plan" as const } : {}),
           imageBase64s,
         });
-        const bubbles = parseStructuredReply(reply) ? [reply] : splitConvoBubbles(reply);
-        setMessages((m) => [...m, makeMessage("assistant", bubbles[0])]);
+        const relatedLibraryImages =
+          reply.relatedMemoryIds.length > 0
+            ? await fetchRelatedMemoryThumbnails(reply.relatedMemoryIds)
+            : [];
+        const bubbles = parseStructuredReply(reply.text)
+          ? [reply.text]
+          : splitConvoBubbles(reply.text);
+        setMessages((m) => [
+          ...m,
+          makeMessage(
+            "assistant",
+            bubbles[0],
+            undefined,
+            relatedLibraryImages.length ? relatedLibraryImages : undefined
+          ),
+        ]);
         for (let i = 1; i < bubbles.length; i += 1) {
           await new Promise((r) => setTimeout(r, 450));
           const text = bubbles[i];
@@ -347,6 +369,7 @@ export default function ActionTab() {
                     >
                       <View className="w-full shrink-0 pb-6">
                         <AssistantMessageBody content={msg.text} />
+                        <RelatedLibraryPhotos items={msg.relatedLibraryImages ?? []} />
                       </View>
                       <View className="mt-1 w-full shrink-0 border-t border-[#EDE8DF] pt-5">
                         <View className="shrink-0 flex-row flex-wrap justify-end gap-4">
