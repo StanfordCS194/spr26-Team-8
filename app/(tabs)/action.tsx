@@ -332,6 +332,13 @@ export default function ActionTab() {
     });
   }, [sending, makeMessage]);
 
+  const handleClearOutput = useCallback(() => {
+    setMessages([]);
+    setSavedMessageIds({});
+    setSelectedImages([]);
+    setShowQuickActions(true);
+  }, []);
+
   return (
     <View className="flex-1 bg-[#F4F0EA]">
       <KeyboardAvoidingView
@@ -340,7 +347,20 @@ export default function ActionTab() {
       >
         <View className="flex-1 bg-[#F4F0EA]">
           <SafeAreaView className="flex-1 bg-[#F4F0EA]" edges={["left", "right", "bottom"]}>
-            <Text className="px-5 pt-2 text-4xl font-bold tracking-[-0.5px] text-[#0B0B0B]">Action</Text>
+            <View className="flex-row items-center justify-between px-5 pt-2">
+              <Text className="text-4xl font-bold tracking-[-0.5px] text-[#0B0B0B]">Action</Text>
+              {messages.length > 0 ? (
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="Clear Action output"
+                  onPress={handleClearOutput}
+                  disabled={sending}
+                  className="rounded-full border border-[#DDD7CC] bg-[#FFFCF8] px-3 py-1.5 active:opacity-80 disabled:opacity-50"
+                >
+                  <Text className="text-xs font-semibold text-[#0B0B0B]">Clear</Text>
+                </Pressable>
+              ) : null}
+            </View>
             <Text className="px-5 pb-2 pt-1 text-xs font-medium uppercase tracking-[0.2em] text-[#6B6B6B]">
               Memory-aware assistant
             </Text>
