@@ -5,7 +5,7 @@ import {
   type RelatedMemoryThumbnail,
   fetchRelatedMemoryThumbnails,
 } from "@/lib/fetchMemoryThumbnailUrls";
-import { saveChatOutput, suggestSavedChatOutputTitle } from "@/lib/savedChatOutputs";
+import { removeSavedChatOutput, saveChatOutput, suggestSavedChatOutputTitle } from "@/lib/savedChatOutputs";
 import { Ionicons } from "@expo/vector-icons";
 import { useRef, useState } from "react";
 import {
@@ -40,7 +40,7 @@ export function MiniChatWindow() {
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [savedMessageIds, setSavedMessageIds] = useState<Record<string, boolean>>({});
+  const [savedMessageIds, setSavedMessageIds] = useState<Record<string, string>>({});
   const [chatHeight, setChatHeight] = useState(500);
   const scrollRef = useRef<ScrollView>(null);
   const startHeightRef = useRef(500);
@@ -48,10 +48,23 @@ export function MiniChatWindow() {
   const maxHeight = Math.max(minHeight, windowHeight - 100);
 
   const handleSaveMessage = (messageId: string, messageText: string) => {
+    const existingSavedId = savedMessageIds[messageId];
+    if (existingSavedId) {
+      void removeSavedChatOutput(existingSavedId).then(() => {
+        setSavedMessageIds((prev) => {
+          const next = { ...prev };
+          delete next[messageId];
+          return next;
+        });
+      });
+      return;
+    }
     const saveWithTitle = (title?: string) => {
-      void saveChatOutput(messageText, { title }).then(() =>
-        setSavedMessageIds((prev) => ({ ...prev, [messageId]: true }))
-      );
+      void saveChatOutput(messageText, { title }).then((allSaved) => {
+        const savedItem = allSaved.find((item) => item.full_text.trim() === messageText.trim());
+        if (!savedItem) return;
+        setSavedMessageIds((prev) => ({ ...prev, [messageId]: savedItem.id }));
+      });
     };
     const suggested = suggestSavedChatOutputTitle(messageText);
     if (Platform.OS === "ios") {
@@ -253,10 +266,11 @@ export function MiniChatWindow() {
                           </Pressable>
                           <Pressable
                             accessibilityRole="button"
-                            accessibilityLabel="Save chat output"
+                            accessibilityLabel={
+                              savedMessageIds[msg.id] ? "Remove saved chat output" : "Save chat output"
+                            }
                             onPress={() => handleSaveMessage(msg.id, msg.text)}
-                            disabled={Boolean(savedMessageIds[msg.id])}
-                            className="flex-row items-center gap-1 rounded-full border border-[#DDD7CC] bg-[#FFFCF8] px-2 py-1 active:opacity-80 disabled:opacity-60"
+                            className="flex-row items-center gap-1 rounded-full border border-[#DDD7CC] bg-[#FFFCF8] px-2 py-1 active:opacity-80"
                           >
                             <Ionicons
                               name={savedMessageIds[msg.id] ? "bookmark" : "bookmark-outline"}
