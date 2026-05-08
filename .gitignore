@@ -19,3 +19,4 @@ __pycache__/
 CLAUDE.local.md
 android/
 ios/
+.claude/
