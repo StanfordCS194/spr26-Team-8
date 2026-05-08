@@ -124,14 +124,21 @@ export async function generateWeeklyRecap(): Promise<{ bullets: string; week_anc
 
   const uploadsBlock =
     (memoryRows ?? [])
-      .map((m: { want_to_do?: string | null; user_caption?: string | null; ocr_description?: string | null }) => {
-        const parts = [m.want_to_do, m.user_caption, m.ocr_description]
-          .map((x) => (typeof x === "string" ? x.trim() : ""))
-          .filter(Boolean);
-        return parts.length ? `- ${parts.join(" · ").slice(0, 600)}` : null;
-      })
-      .filter(Boolean)
-      .join("\n") || "(no saved memory text yet)";
+      .map(
+        (m: {
+          memory_id: string;
+          want_to_do?: string | null;
+          user_caption?: string | null;
+          ocr_description?: string | null;
+        }) => {
+          const parts = [m.want_to_do, m.user_caption, m.ocr_description]
+            .map((x) => (typeof x === "string" ? x.trim() : ""))
+            .filter(Boolean);
+          const summary = parts.length ? parts.join(" · ").slice(0, 600) : "(no text on this upload yet)";
+          return `MEMORY_ID: ${m.memory_id}\nSUMMARY: ${summary}`;
+        }
+      )
+      .join("\n\n") || "(no saved memories yet)";
 
   const systemPrompt =
     "You write bite-sized weekly nudges for a mobile app called Venn.\n" +
@@ -141,7 +148,11 @@ export async function generateWeeklyRecap(): Promise<{ bullets: string; week_anc
     "In each line, wrap the concrete object/item of the action in double-asterisks for emphasis (exactly ONE bold span), like: - Book **dentist appointment**.\n" +
     "Do not bold the verb; bold the thing (place/item/task/name). Do not include more than one **bold** span per line.\n" +
     "Use vivid verbs and plain language. No ‘Dear user’, no lecture. No duplicate ideas.\n" +
-    "If context is thin, still output 3 lines: short honest guesses from what exists, and keep one line gently nudging them to add “I want to…” on Library uploads next time.";
+    "When a nudge is clearly tied to ONE upload in the MEMORY_ID list (especially invites, RSVPs, events, deadlines, tickets, reservations, flights, shipping), put the tag immediately after the dash and a space:\n" +
+    "- [memory:<the-uploads-MEMORY_ID-uuid>] RSVP for **wedding invite**\n" +
+    "Use ONLY MEMORY_ID values from the upload section — never invent an id. If the idea comes only from chat or matches no single memory, omit [memory:…].\n" +
+    "If context is thin, still output 3 lines: short honest guesses from what exists, and keep one line gently nudging them to add “I want to…” on Library uploads next time.\n" +
+    "That onboarding line (only that one) MUST use the tag right after '- ': '- [tip] …' so the app does not treat it as a chat task. Do not use [tip] on the other two lines.";
 
   const userPayload =
     `--- Recent uploads / intents (captions & “want to”) ---\n${uploadsBlock}\n\n` +

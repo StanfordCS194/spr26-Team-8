@@ -29,6 +29,7 @@ import {
   saveSignedUrlCache,
 } from "@/lib/archiveSignedUrlCache";
 import { useFocusEffect } from "@react-navigation/native";
+import { router, useLocalSearchParams } from "expo-router";
 import { decode } from "base64-arraybuffer";
 import { Ionicons } from "@expo/vector-icons";
 import * as FileSystem from "expo-file-system/legacy";
@@ -36,7 +37,6 @@ import * as FileSystem from "expo-file-system/legacy";
 import { Image } from "expo-image";
 import * as ImageManipulator from "expo-image-manipulator";
 import * as ImagePicker from "expo-image-picker";
-import { router, useLocalSearchParams } from "expo-router";
 import { useIncomingShare } from "expo-sharing";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -131,8 +131,13 @@ function normalizeSingleParam(v: string | string[] | undefined): string | undefi
 }
 
 export default function ArchiveTab() {
-  const archiveParams = useLocalSearchParams<{ openMemoryId?: string | string[] }>();
-  const pendingOpenMemoryId = normalizeSingleParam(archiveParams.openMemoryId)?.trim();
+  const archiveParams = useLocalSearchParams<{
+    openMemoryId?: string | string[];
+    /** Back-compat with older deep links. */
+    openMemory?: string | string[];
+  }>();
+  const pendingOpenMemoryId =
+    normalizeSingleParam(archiveParams.openMemoryId ?? archiveParams.openMemory)?.trim();
   const [items, setItems] = useState<BoardItem[]>([]);
   const [archiveLoadGeneration, setArchiveLoadGeneration] = useState(0);
   const [meta, setMeta] = useState<Record<string, ArchiveItemMeta>>({});
@@ -377,7 +382,8 @@ export default function ArchiveTab() {
     const targetId = `uploaded-${pendingOpenMemoryId}`;
     const item = items.find((i) => i.id === targetId);
     if (item) setSelectedItem(item);
-    router.setParams({ openMemoryId: undefined });
+    // Clear both to be safe (some callers still use openMemory).
+    router.setParams({ openMemoryId: undefined, openMemory: undefined });
   }, [pendingOpenMemoryId, items, archiveLoadGeneration]);
 
   useEffect(() => {
@@ -591,13 +597,12 @@ export default function ArchiveTab() {
           .select("memory_id")
           .single();
 
-      let temporalSavedOnInsert = false;
       let ins = await insertWithTemporal();
-      if (ins.error && isUndefinedColumnError(ins.error, "text_temporal")) {
+      const temporalInsertSucceeded = Boolean(!ins.error && ins.data);
+      if (ins.error) {
         ins = await insertMinimal();
-      } else if (!ins.error) {
-        temporalSavedOnInsert = true;
       }
+      const temporalSavedOnInsert = temporalInsertSucceeded;
 
       const memoryRow = ins.data;
       const insertMemErr = ins.error;

@@ -7,7 +7,7 @@ import {
 } from "@/lib/fetchMemoryThumbnailUrls";
 import { CHAT_PROMPTS, sendChatMessage } from "@/lib/chat";
 import { posthog } from "@/lib/posthog";
-import { saveChatOutput, suggestSavedChatOutputTitle } from "@/lib/savedChatOutputs";
+import { removeSavedChatOutput, saveChatOutput, suggestSavedChatOutputTitle } from "@/lib/savedChatOutputs";
 import { Ionicons } from "@expo/vector-icons";
 import { useFocusEffect } from "@react-navigation/native";
 import { router, useLocalSearchParams } from "expo-router";
@@ -116,15 +116,28 @@ export default function ActionTab() {
   const [selectedImages, setSelectedImages] = useState<SelectedImage[]>([]);
   const [sending, setSending] = useState(false);
   const [showQuickActions, setShowQuickActions] = useState(true);
-  const [savedMessageIds, setSavedMessageIds] = useState<Record<string, boolean>>({});
+  const [savedMessageIds, setSavedMessageIds] = useState<Record<string, string>>({});
   const scrollRef = useRef<ScrollView>(null);
   const chatSessionId = useRef(`chat-${Date.now()}`).current;
 
   const handleSaveMessage = useCallback((messageId: string, messageText: string) => {
+    const existingSavedId = savedMessageIds[messageId];
+    if (existingSavedId) {
+      void removeSavedChatOutput(existingSavedId).then(() => {
+        setSavedMessageIds((prev) => {
+          const next = { ...prev };
+          delete next[messageId];
+          return next;
+        });
+      });
+      return;
+    }
     const saveWithTitle = (title?: string) => {
-      void saveChatOutput(messageText, { title }).then(() =>
-        setSavedMessageIds((prev) => ({ ...prev, [messageId]: true }))
-      );
+      void saveChatOutput(messageText, { title }).then((allSaved) => {
+        const savedItem = allSaved.find((item) => item.full_text.trim() === messageText.trim());
+        if (!savedItem) return;
+        setSavedMessageIds((prev) => ({ ...prev, [messageId]: savedItem.id }));
+      });
     };
     const suggested = suggestSavedChatOutputTitle(messageText);
     if (Platform.OS === "ios") {
@@ -133,7 +146,7 @@ export default function ActionTab() {
         "Edit the title before saving.",
         [
           { text: "Cancel", style: "cancel" },
-          { text: "Save", onPress: (value) => saveWithTitle(value) },
+          { text: "Save", onPress: (value?: string) => saveWithTitle(value) },
         ],
         "plain-text",
         suggested
@@ -141,7 +154,7 @@ export default function ActionTab() {
       return;
     }
     saveWithTitle(suggested);
-  }, []);
+  }, [savedMessageIds]);
 
   const makeMessage = useCallback(
     (
@@ -319,6 +332,13 @@ export default function ActionTab() {
     });
   }, [sending, makeMessage]);
 
+  const handleClearOutput = useCallback(() => {
+    setMessages([]);
+    setSavedMessageIds({});
+    setSelectedImages([]);
+    setShowQuickActions(true);
+  }, []);
+
   return (
     <View className="flex-1 bg-[#F4F0EA]">
       <KeyboardAvoidingView
@@ -327,7 +347,20 @@ export default function ActionTab() {
       >
         <View className="flex-1 bg-[#F4F0EA]">
           <SafeAreaView className="flex-1 bg-[#F4F0EA]" edges={["left", "right", "bottom"]}>
-            <Text className="px-5 pt-2 text-4xl font-bold tracking-[-0.5px] text-[#0B0B0B]">Action</Text>
+            <View className="flex-row items-center justify-between px-5 pt-2">
+              <Text className="text-4xl font-bold tracking-[-0.5px] text-[#0B0B0B]">Action</Text>
+              {messages.length > 0 ? (
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="Clear Action output"
+                  onPress={handleClearOutput}
+                  disabled={sending}
+                  className="rounded-full border border-[#DDD7CC] bg-[#FFFCF8] px-3 py-1.5 active:opacity-80 disabled:opacity-50"
+                >
+                  <Text className="text-xs font-semibold text-[#0B0B0B]">Clear</Text>
+                </Pressable>
+              ) : null}
+            </View>
             <Text className="px-5 pb-2 pt-1 text-xs font-medium uppercase tracking-[0.2em] text-[#6B6B6B]">
               Memory-aware assistant
             </Text>
@@ -407,10 +440,11 @@ export default function ActionTab() {
                           </Pressable>
                           <Pressable
                             accessibilityRole="button"
-                            accessibilityLabel="Save chat output"
+                            accessibilityLabel={
+                              savedMessageIds[msg.id] ? "Remove saved chat output" : "Save chat output"
+                            }
                             onPress={() => handleSaveMessage(msg.id, msg.text)}
-                            disabled={Boolean(savedMessageIds[msg.id])}
-                            className="flex-row items-center gap-1 rounded-full border border-[#DDD7CC] bg-[#FFFCF8] px-2.5 py-1.5 active:opacity-80 disabled:opacity-60"
+                            className="flex-row items-center gap-1 rounded-full border border-[#DDD7CC] bg-[#FFFCF8] px-2.5 py-1.5 active:opacity-80"
                           >
                             <Ionicons
                               name={savedMessageIds[msg.id] ? "bookmark" : "bookmark-outline"}

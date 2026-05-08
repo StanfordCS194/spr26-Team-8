@@ -15,8 +15,10 @@ import {
   type WeeklyRecapRow,
 } from "@/lib/weeklyRecap";
 import { MarkdownishBoldLine } from "@/components/MarkdownishBoldLine";
+import { parseWeeklyRecapBullets, resolveNudgeTapAction } from "@/lib/nudgeBullet";
 import { Ionicons } from "@expo/vector-icons";
 import { useFocusEffect } from "@react-navigation/native";
+import { useRouter } from "expo-router";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
@@ -27,19 +29,6 @@ import {
   View,
 } from "react-native";
 
-/** Split model output into clean lines for list UI (legacy rows may exceed three). */
-function parseBulletLines(raw: string): string[] {
-  return raw
-    .split(/\n/)
-    .map((line) =>
-      line
-        .replace(/^\s*[-*•]\s*/, "")
-        .replace(/^\s*\d+[.)]\s*/, "")
-        .trim()
-    )
-    .filter((line) => line.length > 0);
-}
-
 /**
  * Weekly intent recap for the Action tab — polished card above the chat thread.
  */
@@ -49,6 +38,7 @@ export function WeeklyRecapCard({
 }: {
   onPickPrompt?: (prompt: string) => void;
 }) {
+  const router = useRouter();
   const [userId, setUserId] = useState<string | null>(null);
   const [weekAnchor] = useState(() => utcWeekAnchorMonday());
   const [prefsOn, setPrefsOn] = useState(true);
@@ -138,17 +128,17 @@ export function WeeklyRecapCard({
     setPrefsOn(true);
   }, []);
 
-  const bulletLines = useMemo(
-    () => (recap ? parseBulletLines(recap.bullets) : []),
+  const parsedNudges = useMemo(
+    () => (recap ? parseWeeklyRecapBullets(recap.bullets) : []),
     [recap]
   );
 
-  const displayLines = useMemo(
-    () => bulletLines.slice(0, WEEKLY_RECAP_LINE_COUNT),
-    [bulletLines]
+  const displayNudges = useMemo(
+    () => parsedNudges.slice(0, WEEKLY_RECAP_LINE_COUNT),
+    [parsedNudges]
   );
 
-  const longTextFallback = Boolean(recap && bulletLines.length === 0 && recap.bullets.trim());
+  const longTextFallback = Boolean(recap && parsedNudges.length === 0 && recap.bullets.trim());
 
   if (loading || !userId) return null;
 
@@ -335,17 +325,19 @@ export function WeeklyRecapCard({
         ) : (
           <View>
             <View className="gap-2.5">
-              {displayLines.map((line, i) => (
-                <Pressable
-                  key={`${i}-${line.slice(0, 24)}`}
-                  accessibilityRole="button"
-                  onPress={() => onPickPrompt?.(line)}
-                  disabled={!onPickPrompt}
-                  className="overflow-hidden rounded-2xl border border-[#E6E1DA] bg-[#FFFCF8] px-3.5 py-3 shadow-sm active:opacity-70 disabled:opacity-100"
-                >
-                  <View className="flex-row items-start gap-2.5">
+              {displayNudges.map((nudge, i) => {
+                const line = nudge.displayLine;
+                const action = resolveNudgeTapAction(nudge);
+                const iconName =
+                  action === "library"
+                    ? "image-outline"
+                    : action === "none"
+                      ? "information-circle-outline"
+                      : "chatbubble-ellipses-outline";
+                const rowBody = (
+                  <>
                     <View className="mt-0.5 h-6 w-6 items-center justify-center rounded-full bg-black/5">
-                      <Ionicons name="chatbubble-ellipses-outline" size={14} color="#0B0B0B" />
+                      <Ionicons name={iconName} size={14} color="#0B0B0B" />
                     </View>
                     <View className="min-w-0 flex-1">
                       <MarkdownishBoldLine
@@ -353,16 +345,53 @@ export function WeeklyRecapCard({
                         className="text-[15px] leading-[22px] text-[#1A1A1A]"
                         boldClassName="font-semibold"
                       />
-                      {onPickPrompt ? (
+                      {action === "chat" && onPickPrompt ? (
                         <Text className="mt-1 text-xs font-medium uppercase tracking-[0.16em] text-[#8A8278]">
                           Tap to ask
                         </Text>
+                      ) : action === "library" ? (
+                        <Text className="mt-1 text-xs font-medium uppercase tracking-[0.16em] text-[#8A8278]">
+                          Open photo
+                        </Text>
+                      ) : action === "none" ? (
+                        <Text className="mt-1 text-xs font-medium uppercase tracking-[0.16em] text-[#8A8278]">
+                          Tip
+                        </Text>
                       ) : null}
                     </View>
-                    <Ionicons name="chevron-forward" size={16} color="#8A8278" />
+                    {action === "chat" || action === "library" ? (
+                      <Ionicons name="chevron-forward" size={16} color="#8A8278" />
+                    ) : null}
+                  </>
+                );
+                return action === "none" ? (
+                  <View
+                    key={`${i}-${line.slice(0, 24)}`}
+                    className="overflow-hidden rounded-2xl border border-[#E6E1DA] bg-[#FFFCF8] px-3.5 py-3 shadow-sm"
+                  >
+                    <View className="flex-row items-start gap-2.5">{rowBody}</View>
                   </View>
-                </Pressable>
-              ))}
+                ) : (
+                  <Pressable
+                    key={`${i}-${line.slice(0, 24)}`}
+                    accessibilityRole="button"
+                    disabled={action === "chat" && !onPickPrompt}
+                    onPress={() => {
+                      if (action === "library" && nudge.memoryId) {
+                        router.push({
+                          pathname: "/archive",
+                          params: { openMemoryId: nudge.memoryId },
+                        });
+                        return;
+                      }
+                      onPickPrompt?.(line);
+                    }}
+                    className="overflow-hidden rounded-2xl border border-[#E6E1DA] bg-[#FFFCF8] px-3.5 py-3 shadow-sm active:opacity-70 disabled:opacity-100"
+                  >
+                    <View className="flex-row items-start gap-2.5">{rowBody}</View>
+                  </Pressable>
+                );
+              })}
             </View>
 
             <View className="mt-4 flex-row items-center justify-end border-t border-[#F0EBE2] pt-3">
