@@ -10,6 +10,7 @@ import { buildTentativePlanPrompt } from "@/lib/nudgePrompt";
 import {
   loadSavedChatOutputs,
   removeSavedChatOutput,
+  updateSavedChatOutputTitle,
   type SavedChatOutput,
 } from "@/lib/savedChatOutputs";
 import { fetchWeeklyRecap, generateWeeklyRecap } from "@/lib/weeklyRecap";
@@ -26,6 +27,7 @@ import {
   RefreshControl,
   ScrollView,
   Text,
+  TextInput,
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -40,6 +42,8 @@ export default function NotificationsTab() {
   const [nudges, setNudges] = useState<ParsedNudgeBullet[]>([]);
   const [saved, setSaved] = useState<SavedChatOutput[]>([]);
   const [selectedSaved, setSelectedSaved] = useState<SavedChatOutput | null>(null);
+  const [editingSaved, setEditingSaved] = useState<SavedChatOutput | null>(null);
+  const [editTitleDraft, setEditTitleDraft] = useState("");
 
   const handleRemoveSaved = useCallback((item: SavedChatOutput) => {
     Alert.alert("Remove saved output", "Delete this saved output? This cannot be undone.", [
@@ -67,6 +71,31 @@ export default function NotificationsTab() {
         )
       );
   }, []);
+
+  const handleOpenEditTitle = useCallback((item: SavedChatOutput) => {
+    setEditingSaved(item);
+    setEditTitleDraft(item.title);
+  }, []);
+
+  const handleSaveEditedTitle = useCallback(() => {
+    if (!editingSaved) return;
+    const nextTitle = editTitleDraft.trim();
+    if (!nextTitle) {
+      Alert.alert("Title required", "Please enter a title.");
+      return;
+    }
+    if (nextTitle === editingSaved.title.trim()) {
+      setEditingSaved(null);
+      return;
+    }
+    void updateSavedChatOutputTitle(editingSaved.id, nextTitle).then((next) => {
+      setSaved(next);
+      setSelectedSaved((cur) =>
+        cur?.id === editingSaved.id ? (next.find((x) => x.id === cur.id) ?? cur) : cur
+      );
+      setEditingSaved(null);
+    });
+  }, [editingSaved, editTitleDraft]);
 
   const refresh = useCallback(async (opts?: { mode?: "initial" | "pull" }) => {
     const mode = opts?.mode ?? "initial";
@@ -126,8 +155,7 @@ export default function NotificationsTab() {
   return (
     <View className="flex-1 bg-[#F4F0EA]">
       <SafeAreaView className="flex-1 bg-[#F4F0EA]" edges={["left", "right", "bottom"]}>
-        <View className="flex-row items-center justify-between px-5 pt-2">
-          <Text className="text-sm font-medium text-[#5F5F5F]">Assistant</Text>
+        <View className="flex-row items-center justify-end px-5 pt-2">
           <MiniChatWindow />
         </View>
         <Text className="px-5 pt-1 text-4xl font-bold tracking-[-0.5px] text-[#0B0B0B]">Inbox</Text>
@@ -314,6 +342,14 @@ export default function NotificationsTab() {
                       </Pressable>
                       <Pressable
                         accessibilityRole="button"
+                        accessibilityLabel="Edit saved output title"
+                        onPress={() => handleOpenEditTitle(item)}
+                        className="rounded-full p-1.5 active:bg-black/5"
+                      >
+                        <Ionicons name="create-outline" size={18} color="#8A8278" />
+                      </Pressable>
+                      <Pressable
+                        accessibilityRole="button"
                         accessibilityLabel="Delete saved output"
                         onPress={() => handleRemoveSaved(item)}
                         className="rounded-full p-1.5 active:bg-black/5"
@@ -365,6 +401,16 @@ export default function NotificationsTab() {
                     {selectedSaved ? (
                       <Pressable
                         accessibilityRole="button"
+                        accessibilityLabel="Edit saved output title"
+                        onPress={() => handleOpenEditTitle(selectedSaved)}
+                        className="rounded-full p-1 active:bg-black/5"
+                      >
+                        <Ionicons name="create-outline" size={20} color="#8A8278" />
+                      </Pressable>
+                    ) : null}
+                    {selectedSaved ? (
+                      <Pressable
+                        accessibilityRole="button"
                         accessibilityLabel="Download saved output"
                         onPress={() => handleDownloadSaved(selectedSaved)}
                         className="rounded-full p-1 active:bg-black/5"
@@ -402,6 +448,52 @@ export default function NotificationsTab() {
                     </>
                   ) : null}
                 </ScrollView>
+              </View>
+            </View>
+          </View>
+        </Modal>
+        <Modal
+          visible={Boolean(editingSaved)}
+          transparent
+          animationType="fade"
+          onRequestClose={() => setEditingSaved(null)}
+        >
+          <View className="flex-1">
+            <Pressable
+              className="absolute inset-0 bg-black/40"
+              onPress={() => setEditingSaved(null)}
+              accessibilityLabel="Close edit title"
+            />
+            <View className="absolute inset-0 items-center justify-center px-5">
+              <View className="w-full max-w-md rounded-3xl border border-[#E6E1DA] bg-white px-4 py-4">
+                <Text className="text-base font-semibold text-[#0B0B0B]">Edit title</Text>
+                <TextInput
+                  value={editTitleDraft}
+                  onChangeText={setEditTitleDraft}
+                  placeholder="Enter title"
+                  placeholderTextColor="#8A8278"
+                  className="mt-3 rounded-2xl border border-[#E6E1DA] px-3 py-2.5 text-base text-[#0B0B0B]"
+                  autoFocus
+                  maxLength={56}
+                />
+                <View className="mt-4 flex-row items-center justify-end gap-2">
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel="Cancel title edit"
+                    onPress={() => setEditingSaved(null)}
+                    className="rounded-full border border-[#E6E1DA] px-4 py-2 active:opacity-80"
+                  >
+                    <Text className="text-sm font-semibold text-[#5F5F5F]">Cancel</Text>
+                  </Pressable>
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel="Save title"
+                    onPress={handleSaveEditedTitle}
+                    className="rounded-full bg-[#0B0B0B] px-4 py-2 active:opacity-80"
+                  >
+                    <Text className="text-sm font-semibold text-white">Save</Text>
+                  </Pressable>
+                </View>
               </View>
             </View>
           </View>

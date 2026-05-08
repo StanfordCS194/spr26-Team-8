@@ -1,7 +1,7 @@
 import { router } from "expo-router";
 import { useAuth } from "@/lib/auth";
 import { useEffect } from "react";
-import { ActivityIndicator, Text, View } from "react-native";
+import { ActivityIndicator, Image, Text, View } from "react-native";
 
 export default function Index() {
   const { session, isLoading } = useAuth();
@@ -22,20 +22,11 @@ export default function Index() {
 
   return (
     <View className="flex-1 items-center justify-center bg-[#F4F0EA]">
-      <View className="flex-row items-end">
-        <Text className="text-[84px] font-black leading-[92px] tracking-[1px] text-blue-500">
-          V
-        </Text>
-        <Text className="text-[84px] font-black leading-[92px] tracking-[1px] text-[#10E070]">
-          e
-        </Text>
-        <Text className="text-[84px] font-black leading-[92px] tracking-[1px] text-[#FF4D4D]">
-          n
-        </Text>
-        <Text className="text-[84px] font-black leading-[92px] tracking-[1px] text-[#FF4FD8]">
-          n
-        </Text>
-      </View>
+      <Image
+        source={require("@/assets/images/splash-icon.png")}
+        style={{ width: 200, height: 200 }}
+        resizeMode="contain"
+      />
       <Text className="mt-3 text-sm font-semibold tracking-[2px] text-[#5F5F5F]">
         Loading
       </Text>

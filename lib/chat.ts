@@ -3,6 +3,7 @@
  * the user's recent OCR memory descriptions as grounding context.
  */
 
+import { pickRelatedMemoryIds } from "@/lib/chatRelatedMemories";
 import { supabase } from "@/lib/supabase";
 import { logChatMessage } from "@/lib/chatLog";
 
@@ -103,6 +104,30 @@ async function loadMemoriesForChatContext(userId: string): Promise<MemoryChatRow
   throw new Error(`Could not load memory context: ${lastMessage}`);
 }
 
+function buildUserMessage(
+  memoryContext: string,
+  userText: string,
+  imageBase64s: string[]
+) {
+  const trimmed = userText.trim();
+  const textBlock =
+    `Memory snippets:\n${memoryContext}\n\n` +
+    `User request: ${trimmed || "(image attached, no text)"}`;
+  if (imageBase64s.length === 0) {
+    return { role: "user" as const, content: textBlock };
+  }
+  return {
+    role: "user" as const,
+    content: [
+      { type: "text" as const, text: textBlock },
+      ...imageBase64s.map((b64) => ({
+        type: "image_url" as const,
+        image_url: { url: `data:image/jpeg;base64,${b64}` },
+      })),
+    ],
+  };
+}
+
 /** Suggested prompts for the Action tab until API-driven suggestions exist. */
 export const CHAT_PROMPTS = [
   "Create a bucket list for this weekend",
@@ -111,12 +136,19 @@ export const CHAT_PROMPTS = [
 
 export type ChatResponseStyle = "default" | "inbox_action_plan";
 
+export type ChatMessageReply = {
+  text: string;
+  /** Memories whose OCR/caption text overlaps the assistant reply — thumbnails can link to Library. */
+  relatedMemoryIds: string[];
+};
+
 export async function sendChatMessage(
   userText: string,
-  options?: { style?: ChatResponseStyle }
-): Promise<string> {
+  options?: { style?: ChatResponseStyle; imageBase64s?: string[] }
+): Promise<ChatMessageReply> {
   if (!USE_GENERATIVE_CHAT_API) {
-    return `Echo: ${userText.trim() || "(empty)"}`;
+    const t = userText.trim() || "(empty)";
+    return { text: `Echo: ${t}`, relatedMemoryIds: [] };
   }
   const apiKey = process.env.EXPO_PUBLIC_OPENAI_API_KEY?.trim();
   if (!apiKey) {
@@ -149,6 +181,17 @@ export async function sendChatMessage(
     return mb.localeCompare(ma);
   });
 
+  const memoryCandidates = sortedRows
+    .filter((r) => r.memory_id != null && String(r.memory_id).length > 0)
+    .map((row) => ({
+      memory_id: String(row.memory_id),
+      haystack: [row.want_to_do, row.user_caption, row.ocr_description]
+        .map((x) => (typeof x === "string" ? x.trim() : ""))
+        .filter(Boolean)
+        .join(" "),
+    }))
+    .filter((c) => c.haystack.trim().length > 0);
+
   const snippets = sortedRows.map((row) => {
     const parts = [row.want_to_do, row.user_caption, row.ocr_description]
       .map((x) => (typeof x === "string" ? x.trim() : ""))
@@ -174,39 +217,33 @@ export async function sendChatMessage(
   const style = options?.style ?? "default";
 
   const memoryDiscipline =
-    "Use the numbered memory snippets (want‑to intentions, captions, OCR) as grounding.\n" +
-    "Lines often start with **`[Uploaded locally: <time> · <date>]`** — that is **the user’s phone clock timezone** when the save happened (prefer server `created_at` when listed; otherwise it comes from upload metadata).\n" +
-    "Snippet **#1 is the newest** whenever those upload labels exist.\n" +
-    "Answer “what time?” / “most recent?” using **that labeled local time/date** verbatim when present — don’t say timestamps are unavailable.\n" +
-    "Prefer concrete, real‑world actions. If snippets are sparse, say so briefly and still give practical defaults.";
+    "Use the numbered memory snippets as grounding. Snippets prefixed `[Uploaded locally: <time> · <date>]` are in the user's local timezone, newest first — answer time questions using those labels verbatim. If snippets are sparse, give practical defaults briefly.";
 
   const systemPromptDefault =
-    "You are a planning assistant embedded in Venn.\n" +
+    "You are Venn, a planning assistant. Reply like a friend texting based on the user's memory snippets, requests, and attached files — short and warm.\n" +
     memoryDiscipline +
-    "\nWhen asked for a bucket list or itinerary, synthesize actionable ideas.";
+    "\n\nWhen your tips clearly mirror events or places from the snippets (festivals, food spots, games, trips mentioned there), stay grounded in those same phrases.\n\n" +
+    "Default: 1–2 sentences, ≤25 words. For 2 sentences, split into 2 bubbles separated by a blank line. No upsell, no follow-up offers.\n\n" +
+    "For lists, itineraries, plans, or 3+ distinct items, use this format:\n" +
+    "  one framing sentence\n\n" +
+    "  N. **Title** — short body\n" +
+    "3–4 items, real named things only.";
 
   const systemPromptInboxPlan =
-    "You’re replying to someone who tapped a tiny inbox nudge — they want you to do the thinking legwork.\n" +
+    "You're replying to someone who tapped an inbox nudge. Do the thinking legwork — infer the likely next moves.\n" +
     memoryDiscipline +
-    "\n\nVoice: talk like a warm, slightly informal friend (use “you”, light contractions). " +
-    "No corporate tone, no “Happy to help!”, no AI disclaimer.\n\n" +
-    "Do the “research” for them in a honest way: infer the likely next moves (what to check, book, pack, message, budget for). " +
-    "When their memories name places/dates/gear, use them. " +
-    "If you don’t know live facts, don’t fake them — give 1–2 tight search phrases they can paste into Google/Maps " +
-    "(e.g. “Seljalandsfoss trail conditions May”) or name the *type* of site to check (park page, official hours, trail app). " +
-    "Never invent URLs.\n\n" +
-    "Length: roughly **280–420 characters** (~40–62 words); hard ceiling **520 characters**. Tight beats thorough.\n\n" +
-    "Format (conversation-shaped, easy to skim):\n" +
-    "- Line 1–2: reactive + the gist (“Yeah—if you’re doing X, I'd…”).\n" +
-    "- Then **3 bullets** (`• …`) each fragment-length (start with a verb).\n" +
-    "- Final line starts with Today: … (single concrete starter, ≤18 words).\n" +
-    "- If something essential is missing: add one tiny line: Small ask — … (?)\n\n" +
-    "Do NOT echo the invisible instruction/metadata block; only reply as the assistant.";
+    "\n\nWarm friend tone, no AI disclaimers. If you don't know live facts, suggest a search phrase instead of inventing URLs.\n\n" +
+    "Length: ~30–50 words, hard cap 480 chars. Format:\n" +
+    "  reactive opener (1–2 short lines)\n" +
+    "  • verb-led bullet\n" +
+    "  • verb-led bullet\n" +
+    "  • verb-led bullet\n" +
+    "  Today: one concrete starter (≤18 words)";
 
   const systemPrompt =
     style === "inbox_action_plan" ? systemPromptInboxPlan : systemPromptDefault;
 
-  const response = await fetch("https://api.openai.com/v1/chat/completions", {
+  const requestInit: RequestInit = {
     method: "POST",
     headers: {
       Authorization: `Bearer ${apiKey}`,
@@ -214,18 +251,22 @@ export async function sendChatMessage(
     },
     body: JSON.stringify({
       model: "gpt-4.1-mini",
-      temperature: style === "inbox_action_plan" ? 0.58 : 0.7,
+      temperature: style === "inbox_action_plan" ? 0.58 : 0.5,
       messages: [
         { role: "system", content: systemPrompt },
-        {
-          role: "user",
-          content:
-            `Memory snippets:\n${memoryContext}\n\n` +
-            `User request: ${userText.trim()}`,
-        },
+        buildUserMessage(memoryContext, userText, options?.imageBase64s ?? []),
       ],
     }),
-  });
+  };
+
+  let response: Response;
+  try {
+    response = await fetch("https://api.openai.com/v1/chat/completions", requestInit);
+  } catch (err) {
+    if (!(err instanceof TypeError)) throw err;
+    await new Promise((r) => setTimeout(r, 500));
+    response = await fetch("https://api.openai.com/v1/chat/completions", requestInit);
+  }
 
   if (!response.ok) {
     const errBody = (await response.json().catch(() => ({}))) as {
@@ -246,5 +287,7 @@ export async function sendChatMessage(
 
   void logChatMessage(userId, "assistant", content);
 
-  return content;
+  const relatedMemoryIds = pickRelatedMemoryIds(content, memoryCandidates);
+
+  return { text: content, relatedMemoryIds };
 }

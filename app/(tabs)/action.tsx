@@ -1,13 +1,20 @@
-import { MarkdownishBoldLine } from "@/components/MarkdownishBoldLine";
-import { exportChatTextToFile } from "@/lib/chatExport";
+import { MarkdownishBoldLine, parseStructuredReply, splitConvoBubbles } from "@/components/MarkdownishBoldLine";
+import { RelatedLibraryPhotos } from "@/components/RelatedLibraryPhotos";
+import { copyChatOutput } from "@/lib/copyChatOutput";
+import {
+  type RelatedMemoryThumbnail,
+  fetchRelatedMemoryThumbnails,
+} from "@/lib/fetchMemoryThumbnailUrls";
 import { CHAT_PROMPTS, sendChatMessage } from "@/lib/chat";
 import { posthog } from "@/lib/posthog";
-import { saveChatOutput } from "@/lib/savedChatOutputs";
+import { saveChatOutput, suggestSavedChatOutputTitle } from "@/lib/savedChatOutputs";
 import { Ionicons } from "@expo/vector-icons";
 import { useFocusEffect } from "@react-navigation/native";
 import { router, useLocalSearchParams } from "expo-router";
 import { useCallback, useRef, useState } from "react";
 import { Image } from "expo-image";
+import { File } from "expo-file-system";
+import { ImageManipulator, SaveFormat } from "expo-image-manipulator";
 import * as ImagePicker from "expo-image-picker";
 import {
   ActivityIndicator,
@@ -22,7 +29,14 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
-type ChatMessage = { id: string; role: "user" | "assistant"; text: string };
+type ChatMessage = {
+  id: string;
+  role: "user" | "assistant";
+  text: string;
+  imageUris?: string[];
+  /** Library thumbnails when the reply overlaps saved memory OCR/captions */
+  relatedLibraryImages?: RelatedMemoryThumbnail[];
+};
 type SelectedImage = {
   uri: string;
   width?: number;
@@ -30,10 +44,10 @@ type SelectedImage = {
   fileName?: string | null;
 };
 
-function AssistantMessageBody({ content }: { content: string }) {
+function AssistantPlainBody({ content }: { content: string }) {
   const lines = content.split(/\n/);
   return (
-    <View className="gap-1.5">
+    <View className="w-full shrink-0 gap-1.5" collapsable={Platform.OS === "android" ? false : undefined}>
       {lines.map((raw, i) => {
         const line = raw.trimEnd();
         if (line.trim() === "") {
@@ -43,11 +57,51 @@ function AssistantMessageBody({ content }: { content: string }) {
           <MarkdownishBoldLine
             key={`ln-${i}`}
             line={line}
-            className="text-base leading-6 text-[#0B0B0B]"
+            className="w-full text-base leading-6 text-[#0B0B0B]"
             boldClassName="font-semibold"
           />
         );
       })}
+    </View>
+  );
+}
+
+function AssistantMessageBody({ content }: { content: string }) {
+  const structured = parseStructuredReply(content);
+  if (!structured) return <AssistantPlainBody content={content} />;
+
+  return (
+    <View className="shrink-0 gap-2.5" collapsable={Platform.OS === "android" ? false : undefined}>
+      {structured.intro ? <AssistantPlainBody content={structured.intro} /> : null}
+      <View className="shrink-0 gap-2">
+        {structured.items.map((item, i) => (
+          <View
+            key={`item-${i}-${item.title.slice(0, 24)}`}
+            className="shrink-0 flex-row items-start gap-1.5"
+            collapsable={Platform.OS === "android" ? false : undefined}
+          >
+            <Text className="text-[15px] leading-[20px] font-semibold text-[#0B0B0B]">
+              {i + 1}.
+            </Text>
+            <View
+              style={{ flex: 1, minWidth: 0, flexShrink: 1 }}
+              collapsable={Platform.OS === "android" ? false : undefined}
+            >
+              <MarkdownishBoldLine
+                line={`**${item.title}**`}
+                className="w-full text-[15px] leading-[22px] text-[#0B0B0B]"
+                boldClassName="font-semibold"
+              />
+              <Text
+                className="mt-1 text-[14px] leading-[22px] text-[#4A4540]"
+                style={{ alignSelf: "stretch" }}
+              >
+                {item.body}
+              </Text>
+            </View>
+          </View>
+        ))}
+      </View>
     </View>
   );
 }
@@ -66,11 +120,41 @@ export default function ActionTab() {
   const scrollRef = useRef<ScrollView>(null);
   const chatSessionId = useRef(`chat-${Date.now()}`).current;
 
+  const handleSaveMessage = useCallback((messageId: string, messageText: string) => {
+    const saveWithTitle = (title?: string) => {
+      void saveChatOutput(messageText, { title }).then(() =>
+        setSavedMessageIds((prev) => ({ ...prev, [messageId]: true }))
+      );
+    };
+    const suggested = suggestSavedChatOutputTitle(messageText);
+    if (Platform.OS === "ios") {
+      Alert.prompt(
+        "Save note",
+        "Edit the title before saving.",
+        [
+          { text: "Cancel", style: "cancel" },
+          { text: "Save", onPress: (value?: string) => saveWithTitle(value) },
+        ],
+        "plain-text",
+        suggested
+      );
+      return;
+    }
+    saveWithTitle(suggested);
+  }, []);
+
   const makeMessage = useCallback(
-    (role: "user" | "assistant", text: string): ChatMessage => ({
+    (
+      role: "user" | "assistant",
+      text: string,
+      imageUris?: string[],
+      relatedLibraryImages?: RelatedMemoryThumbnail[]
+    ): ChatMessage => ({
       id: `${role}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       role,
       text,
+      imageUris,
+      ...(relatedLibraryImages?.length ? { relatedLibraryImages } : {}),
     }),
     []
   );
@@ -78,23 +162,63 @@ export default function ActionTab() {
   const appendExchange = useCallback(
     async (userText: string, opts?: { silent?: boolean }) => {
       const trimmed = userText.trim();
-      if (!trimmed || sending) return;
       const silent = Boolean(opts?.silent);
+      const attached = silent ? [] : selectedImages;
+      if ((!trimmed && attached.length === 0) || sending) return;
       setShowQuickActions(false);
       setSending(true);
+      const attachedUris = attached.map((img) => img.uri);
+      if (attached.length > 0) setSelectedImages([]);
       if (!silent) {
-        setMessages((m) => [...m, makeMessage("user", trimmed)]);
+        setMessages((m) => [
+          ...m,
+          makeMessage("user", trimmed, attachedUris.length ? attachedUris : undefined),
+        ]);
       }
       posthog.capture("chat_message_sent", {
         chat_session_id: chatSessionId,
         silent_handoff: silent ? 1 : 0,
+        image_count: attachedUris.length,
       });
       try {
-        const reply = await sendChatMessage(
-          trimmed,
-          silent ? { style: "inbox_action_plan" } : undefined
+        const imageBase64s = await Promise.all(
+          attachedUris.map(async (uri) => {
+            const ref = await ImageManipulator.manipulate(uri)
+              .resize({ width: 1536 })
+              .renderAsync();
+            const jpeg = await ref.saveAsync({
+              format: SaveFormat.JPEG,
+              compress: 0.85,
+            });
+            return new File(jpeg.uri).base64();
+          })
         );
-        setMessages((m) => [...m, makeMessage("assistant", reply)]);
+        const reply = await sendChatMessage(trimmed, {
+          ...(silent ? { style: "inbox_action_plan" as const } : {}),
+          imageBase64s,
+        });
+        const relatedLibraryImages =
+          reply.relatedMemoryIds.length > 0
+            ? await fetchRelatedMemoryThumbnails(reply.relatedMemoryIds)
+            : [];
+        const bubbles = parseStructuredReply(reply.text)
+          ? [reply.text]
+          : splitConvoBubbles(reply.text);
+        setMessages((m) => [
+          ...m,
+          makeMessage(
+            "assistant",
+            bubbles[0],
+            undefined,
+            relatedLibraryImages.length ? relatedLibraryImages : undefined
+          ),
+        ]);
+        for (let i = 1; i < bubbles.length; i += 1) {
+          await new Promise((r) => setTimeout(r, 450));
+          const text = bubbles[i];
+          setMessages((m) => [...m, makeMessage("assistant", text)]);
+          requestAnimationFrame(() => scrollRef.current?.scrollToEnd({ animated: true }));
+        }
       } catch (err) {
         setMessages((m) => [
           ...m,
@@ -110,7 +234,7 @@ export default function ActionTab() {
         requestAnimationFrame(() => scrollRef.current?.scrollToEnd({ animated: true }));
       }
     },
-    [sending, chatSessionId, makeMessage]
+    [sending, chatSessionId, makeMessage, selectedImages]
   );
 
   useFocusEffect(
@@ -167,13 +291,13 @@ export default function ActionTab() {
     }
 
     const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      mediaTypes: ["images"],
       allowsMultipleSelection: true,
-      selectionLimit: 10,
-      quality: 1,
+      selectionLimit: 4,
+      quality: 0.7,
     });
 
-    if (result.canceled) return;
+    if (result.canceled || !result.assets?.length) return;
 
     setSelectedImages((prev) => {
       const next = [
@@ -203,8 +327,7 @@ export default function ActionTab() {
       >
         <View className="flex-1 bg-[#F4F0EA]">
           <SafeAreaView className="flex-1 bg-[#F4F0EA]" edges={["left", "right", "bottom"]}>
-            <Text className="px-5 pt-2 text-sm font-medium text-[#5F5F5F]">Assistant</Text>
-            <Text className="px-5 pt-1 text-4xl font-bold tracking-[-0.5px] text-[#0B0B0B]">Action</Text>
+            <Text className="px-5 pt-2 text-4xl font-bold tracking-[-0.5px] text-[#0B0B0B]">Action</Text>
             <Text className="px-5 pb-2 pt-1 text-xs font-medium uppercase tracking-[0.2em] text-[#6B6B6B]">
               Memory-aware assistant
             </Text>
@@ -212,55 +335,82 @@ export default function ActionTab() {
             <ScrollView
               ref={scrollRef}
               className="flex-1 px-5"
-              contentContainerClassName="pb-4"
+              removeClippedSubviews={false}
+              contentContainerStyle={{ flexGrow: 0, paddingBottom: 16 }}
               onContentSizeChange={() =>
                 scrollRef.current?.scrollToEnd({ animated: true })
               }
             >
-              {messages.map((msg) => (
-                <View
-                  key={msg.id}
-                  className={`mb-3 max-w-[92%] rounded-3xl px-4 py-3 ${
-                    msg.role === "user"
-                      ? "self-end bg-[#0B0B0B]"
-                      : "self-start border border-[#E6E1DA] bg-white shadow-sm"
-                  }`}
-                >
-                  {msg.role === "user" ? (
-                    <Text className="text-base leading-6 text-white">{msg.text}</Text>
-                  ) : (
+              {messages.map((msg) =>
+                msg.role === "user" ? (
+                  <View
+                    key={msg.id}
+                    collapsable={Platform.OS === "android" ? false : undefined}
+                    className="mb-3 max-w-[92%] shrink-0 self-end rounded-3xl bg-[#0B0B0B] px-4 py-3"
+                  >
                     <View>
-                      <AssistantMessageBody content={msg.text} />
-                      <View className="mt-2 flex-row justify-end">
-                        <View className="flex-row items-center gap-2">
+                      {msg.imageUris && msg.imageUris.length > 0 ? (
+                        <View
+                          className={`flex-row flex-wrap gap-1.5 ${msg.text ? "mb-2" : ""}`}
+                        >
+                          {msg.imageUris.map((uri, i) => (
+                            <Image
+                              key={`${msg.id}-img-${i}`}
+                              source={{ uri }}
+                              contentFit="cover"
+                              className="h-32 w-32 rounded-2xl bg-[#2A2A2A]"
+                            />
+                          ))}
+                        </View>
+                      ) : null}
+                      {msg.text ? (
+                        <Text className="text-base leading-6 text-white">{msg.text}</Text>
+                      ) : null}
+                    </View>
+                  </View>
+                ) : (
+                  <View
+                    key={msg.id}
+                    collapsable={Platform.OS === "android" ? false : undefined}
+                    className="mb-3 w-full max-w-xs shrink-0 self-start rounded-3xl"
+                    style={
+                      Platform.OS === "ios"
+                        ? {
+                            shadowColor: "#000000",
+                            shadowOffset: { width: 0, height: 1 },
+                            shadowOpacity: 0.06,
+                            shadowRadius: 4,
+                          }
+                        : Platform.OS === "android"
+                          ? { elevation: 2 }
+                          : undefined
+                    }
+                  >
+                    <View
+                      collapsable={Platform.OS === "android" ? false : undefined}
+                      className="w-full shrink-0 overflow-hidden rounded-3xl border border-[#E6E1DA] bg-white px-5 pt-4 pb-6"
+                    >
+                      <View className="w-full shrink-0 pb-6">
+                        <AssistantMessageBody content={msg.text} />
+                        <RelatedLibraryPhotos items={msg.relatedLibraryImages ?? []} />
+                      </View>
+                      <View className="mt-1 w-full shrink-0 border-t border-[#EDE8DF] pt-5">
+                        <View className="shrink-0 flex-row flex-wrap justify-end gap-4">
                           <Pressable
                             accessibilityRole="button"
-                            accessibilityLabel="Download chat output"
-                            onPress={() => {
-                              void exportChatTextToFile(msg.text, msg.text)
-                                .then(() => Alert.alert("Download", "Use the share sheet to save this to Files."))
-                                .catch((err) =>
-                                  Alert.alert(
-                                    "Download failed",
-                                    err instanceof Error ? err.message : "Could not export output."
-                                  )
-                                );
-                            }}
-                            className="flex-row items-center gap-1 rounded-full border border-[#E6E1DA] bg-[#FFFCF8] px-2.5 py-1.5 active:opacity-80"
+                            accessibilityLabel="Copy chat output"
+                            onPress={() => void copyChatOutput(msg.text)}
+                            className="flex-row items-center gap-1 rounded-full border border-[#DDD7CC] bg-[#FFFCF8] px-2.5 py-1.5 active:opacity-80"
                           >
-                            <Ionicons name="download-outline" size={14} color="#0B0B0B" />
-                            <Text className="text-xs font-semibold text-[#0B0B0B]">Download</Text>
+                            <Ionicons name="copy-outline" size={14} color="#0B0B0B" />
+                            <Text className="text-xs font-semibold text-[#0B0B0B]">Copy</Text>
                           </Pressable>
                           <Pressable
                             accessibilityRole="button"
                             accessibilityLabel="Save chat output"
-                            onPress={() => {
-                              void saveChatOutput(msg.text).then(() =>
-                                setSavedMessageIds((prev) => ({ ...prev, [msg.id]: true }))
-                              );
-                            }}
+                            onPress={() => handleSaveMessage(msg.id, msg.text)}
                             disabled={Boolean(savedMessageIds[msg.id])}
-                            className="flex-row items-center gap-1 rounded-full border border-[#E6E1DA] bg-[#FFFCF8] px-2.5 py-1.5 active:opacity-80 disabled:opacity-60"
+                            className="flex-row items-center gap-1 rounded-full border border-[#DDD7CC] bg-[#FFFCF8] px-2.5 py-1.5 active:opacity-80 disabled:opacity-60"
                           >
                             <Ionicons
                               name={savedMessageIds[msg.id] ? "bookmark" : "bookmark-outline"}
@@ -274,9 +424,9 @@ export default function ActionTab() {
                         </View>
                       </View>
                     </View>
-                  )}
-                </View>
-              ))}
+                  </View>
+                )
+              )}
               {sending ? (
                 <View className="flex-row items-center gap-2 py-2">
                   <ActivityIndicator size="small" color="#0B0B0B" />
@@ -309,36 +459,7 @@ export default function ActionTab() {
           </SafeAreaView>
 
           <View className="bg-[#F4F0EA] px-3 pb-4 pt-2">
-            {selectedImages.length ? (
-              <ScrollView
-                horizontal
-                showsHorizontalScrollIndicator={false}
-                className="mb-2"
-                contentContainerClassName="gap-2 px-1"
-              >
-                {selectedImages.map((img) => (
-                  <View key={img.uri} className="relative">
-                    <Image
-                      source={{ uri: img.uri }}
-                      contentFit="cover"
-                      className="h-16 w-16 rounded-2xl border border-[#E6E1DA] bg-white"
-                    />
-                    <Pressable
-                      accessibilityRole="button"
-                      onPress={() =>
-                        setSelectedImages((prev) => prev.filter((p) => p.uri !== img.uri))
-                      }
-                      hitSlop={10}
-                      className="absolute -right-1 -top-1 h-6 w-6 items-center justify-center rounded-full bg-[#0B0B0B] active:opacity-80"
-                    >
-                      <Ionicons name="close" size={14} color="#FFFFFF" />
-                    </Pressable>
-                  </View>
-                ))}
-              </ScrollView>
-            ) : null}
-
-            <View className="flex-row items-center gap-2">
+            <View className="flex-row items-end gap-2">
               <Pressable
                 accessibilityRole="button"
                 onPress={() => void pickImages()}
@@ -348,31 +469,78 @@ export default function ActionTab() {
                 <Ionicons name="add" size={24} color="#0B0B0B" />
               </Pressable>
 
-              <View className="min-h-[44px] flex-1 flex-row items-center rounded-full border border-[#E6E1DA] bg-[#F0EBE3] px-4 py-1">
-                <TextInput
-                  value={input}
-                  onChangeText={setInput}
-                  placeholder="What would you like to do today?"
-                  placeholderTextColor="rgba(95, 95, 95, 0.55)"
-                  className="min-h-[36px] flex-1 text-[#0B0B0B]"
-                  style={{ fontSize: 16, lineHeight: 22, paddingVertical: 0 }}
-                  multiline={false}
-                  scrollEnabled={false}
-                  textAlignVertical="center"
-                  editable={!sending}
-                  onSubmitEditing={() => {
-                    void appendExchange(input);
-                    setInput("");
-                  }}
-                  returnKeyType="send"
-                />
-                <Pressable
-                  accessibilityRole="button"
-                  className="ml-1 p-1 active:opacity-70"
-                  hitSlop={8}
-                >
-                  <Ionicons name="mic-outline" size={22} color="rgba(95, 95, 95, 0.55)" />
-                </Pressable>
+              <View className="min-h-[44px] flex-1 rounded-3xl border border-[#E6E1DA] bg-[#F0EBE3] px-3 py-2">
+                {selectedImages.length ? (
+                  <View
+                    className="mb-2 flex-row flex-wrap gap-1.5"
+                    style={{ minHeight: 80 }}
+                  >
+                    {selectedImages.map((img) => (
+                      <View
+                        key={img.uri}
+                        className="relative"
+                        style={{ width: 80, height: 80 }}
+                      >
+                        <Image
+                          source={{ uri: img.uri }}
+                          contentFit="cover"
+                          style={{
+                            width: 80,
+                            height: 80,
+                            borderRadius: 12,
+                            backgroundColor: "#E0DAD0",
+                          }}
+                        />
+                        <Pressable
+                          accessibilityRole="button"
+                          onPress={() =>
+                            setSelectedImages((prev) => prev.filter((p) => p.uri !== img.uri))
+                          }
+                          hitSlop={10}
+                          style={{
+                            position: "absolute",
+                            top: -6,
+                            right: -6,
+                            width: 24,
+                            height: 24,
+                            borderRadius: 12,
+                            backgroundColor: "rgba(0,0,0,0.7)",
+                            alignItems: "center",
+                            justifyContent: "center",
+                          }}
+                        >
+                          <Ionicons name="close" size={14} color="#FFFFFF" />
+                        </Pressable>
+                      </View>
+                    ))}
+                  </View>
+                ) : null}
+                <View className="flex-row items-center">
+                  <TextInput
+                    value={input}
+                    onChangeText={setInput}
+                    placeholder="What would you like to do today?"
+                    placeholderTextColor="rgba(95, 95, 95, 0.55)"
+                    className="min-h-[28px] flex-1 text-[#0B0B0B]"
+                    style={{ fontSize: 16, lineHeight: 22, paddingVertical: 0 }}
+                    multiline={false}
+                    scrollEnabled={false}
+                    textAlignVertical="center"
+                    editable={!sending}
+                    onSubmitEditing={() => {
+                      void appendExchange(input);
+                      setInput("");
+                    }}
+                    returnKeyType="send"
+                  />
+                  <Pressable
+                    accessibilityRole="button"
+                    className="ml-1 p-1 active:opacity-70"
+                    hitSlop={8}
+                  >
+                    <Ionicons name="mic-outline" size={22} color="rgba(95, 95, 95, 0.55)" />
+                  </Pressable>
+                </View>
               </View>
 
               <Pressable
@@ -381,7 +549,7 @@ export default function ActionTab() {
                   void appendExchange(input);
                   setInput("");
                 }}
-                disabled={sending || !input.trim()}
+                disabled={sending || (!input.trim() && selectedImages.length === 0)}
                 className="h-9 w-9 items-center justify-center rounded-full bg-[#0B0B0B] active:opacity-80 disabled:opacity-40"
               >
                 <Ionicons name="send" size={18} color="#FFFFFF" />

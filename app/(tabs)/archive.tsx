@@ -1,7 +1,6 @@
 import type { ArchiveItemMeta } from "@/lib/archiveSearchAndCluster";
 import {
   archiveIndexForBackend,
-  distinctThemes,
   enrichArchiveRows,
   hydrateArchiveMeta,
   mergeArchiveMeta,
@@ -23,20 +22,25 @@ import { extractSearchableTextFromImage } from "@/lib/vision";
 import { posthog } from "@/lib/posthog";
 import { supabase } from "@/lib/supabase";
 import { isUndefinedColumnError } from "@/lib/supabaseSchema";
+import {
+  type CachedSignedUrl,
+  clearSignedUrlCache,
+  loadSignedUrlCache,
+  saveSignedUrlCache,
+} from "@/lib/archiveSignedUrlCache";
 import { useFocusEffect } from "@react-navigation/native";
 import { router, useLocalSearchParams } from "expo-router";
 import { decode } from "base64-arraybuffer";
 import { Ionicons } from "@expo/vector-icons";
 import * as FileSystem from "expo-file-system/legacy";
+// using expo-image so photos actually cache on disk between launches
+import { Image } from "expo-image";
 import * as ImageManipulator from "expo-image-manipulator";
 import * as ImagePicker from "expo-image-picker";
+import { useIncomingShare } from "expo-sharing";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert,
-  AppState,
-  type AppStateStatus,
-  Image,
-  type ImageSourcePropType,
   KeyboardAvoidingView,
   Modal,
   Platform,
@@ -56,12 +60,18 @@ const imageHeights = [220, 280, 200, 260];
 
 type BoardItem = {
   id: string;
-  source: ImageSourcePropType;
+  // always a Supabase signed URL
+  source: { uri: string };
   height: number;
   /** From `files.file_name` — used for tag/theme inference and keyword search (not raw memory UUID). */
   searchFileName: string;
   /** From `memories.ocr_description` + `user_caption`; merged with local supplemental OCR cache. */
   serverSearchText: string;
+  /** `memories.user_caption` — shown and editable in the viewer. */
+  userCaption: string | null;
+  /** Rebuild `serverSearchText` after caption edits. */
+  wantToDo: string;
+  ocrDescription: string;
 };
 
 type GridCell = {
@@ -77,6 +87,15 @@ type MemoryFileRow = {
     | { storage_path: string; file_name: string }
     | { storage_path: string; file_name: string }[]
     | null;
+};
+
+type UploadAsset = {
+  uri: string;
+  fileName?: string | null;
+  mimeType?: string | null;
+  // dimensions only come through the image picker, not the share sheet
+  width?: number | null;
+  height?: number | null;
 };
 
 const isJpegAsset = (mimeType?: string | null, fileName?: string | null) => {
@@ -105,21 +124,35 @@ const searchInputStyles = StyleSheet.create({
   },
 });
 
+function normalizeSingleParam(v: string | string[] | undefined): string | undefined {
+  if (typeof v === "string") return v;
+  if (Array.isArray(v) && typeof v[0] === "string") return v[0];
+  return undefined;
+}
+
 export default function ArchiveTab() {
-  const params = useLocalSearchParams<{ openMemory?: string | string[] }>();
+  const archiveParams = useLocalSearchParams<{
+    openMemoryId?: string | string[];
+    /** Back-compat with older deep links. */
+    openMemory?: string | string[];
+  }>();
+  const pendingOpenMemoryId =
+    normalizeSingleParam(archiveParams.openMemoryId ?? archiveParams.openMemory)?.trim();
   const [items, setItems] = useState<BoardItem[]>([]);
+  const [archiveLoadGeneration, setArchiveLoadGeneration] = useState(0);
   const [meta, setMeta] = useState<Record<string, ArchiveItemMeta>>({});
   const [themeOverrides, setThemeOverrides] = useState<Record<string, string>>({});
   const [searchQuery, setSearchQuery] = useState("");
-  const [themeFilter, setThemeFilter] = useState<"all" | string>("all");
   const [supplementalSearchById, setSupplementalSearchById] = useState<Record<string, string>>({});
   const [selectedItem, setSelectedItem] = useState<BoardItem | null>(null);
-  const [pendingAsset, setPendingAsset] = useState<ImagePicker.ImagePickerAsset | null>(null);
+  const [pendingAsset, setPendingAsset] = useState<UploadAsset | null>(null);
   const [captionDraft, setCaptionDraft] = useState("");
   const [intentDraft, setIntentDraft] = useState("");
   const [weeklyNudgeEnabled, setWeeklyNudgeEnabledState] = useState(true);
   const [isUploading, setIsUploading] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [isSavingCaption, setIsSavingCaption] = useState(false);
+  const [viewerCaptionDraft, setViewerCaptionDraft] = useState("");
   const [isBulkDeleting, setIsBulkDeleting] = useState(false);
   const [isSelecting, setIsSelecting] = useState(false);
   const [bulkSelectedIds, setBulkSelectedIds] = useState<string[]>([]);
@@ -131,10 +164,19 @@ export default function ArchiveTab() {
     w: number;
     h: number;
   } | null>(null);
-  const { width: windowWidth } = useWindowDimensions();
+  const { width: windowWidth, height: windowHeight } = useWindowDimensions();
   const settingsButtonRef = useRef<View | null>(null);
   const insets = useSafeAreaInsets();
   const ACCOUNT_MENU_W = 208;
+  const { resolvedSharedPayloads, clearSharedPayloads, error: shareError, refreshSharePayloads } =
+    useIncomingShare();
+
+  // hold onto signed URLs so the URL string stays the same across reloads. that's what lets the disk cache hit
+  const signedUrlCacheRef = useRef<Map<string, CachedSignedUrl>>(new Map());
+  // remember which user this cache belongs to, so we re-hydrate from disk when the user changes
+  const cachedUserIdRef = useRef<string | null>(null);
+  // when we last loaded. used to skip redundant reloads
+  const lastLoadAtRef = useRef<number>(0);
 
   useEffect(() => {
     void loadSupplementalSearchText().then(setSupplementalSearchById);
@@ -145,113 +187,214 @@ export default function ArchiveTab() {
     void getWeeklyNudgeEnabled().then(setWeeklyNudgeEnabledState);
   }, [accountMenuOpen]);
 
+  useEffect(() => {
+    if (shareError) {
+      Alert.alert("Share", "Could not read incoming shared content.");
+    }
+  }, [shareError]);
+
+  useEffect(() => {
+    if (!resolvedSharedPayloads.length) return;
+
+    const sharedImageUris = resolvedSharedPayloads
+      .filter((payload) => payload.contentType === "image" && payload.contentUri)
+      .map((payload) => payload.contentUri)
+      .filter((uri): uri is string => typeof uri === "string");
+
+    if (!sharedImageUris.length) return;
+
+    const uri = sharedImageUris[0];
+    clearSharedPayloads();
+    void refreshSharePayloads();
+
+    setPendingAsset({
+      uri,
+      fileName: uri.split("/").pop() ?? `shared-${Date.now()}.jpg`,
+      mimeType: "image/jpeg",
+    });
+    setCaptionDraft("");
+    setIntentDraft("");
+  }, [clearSharedPayloads, refreshSharePayloads, resolvedSharedPayloads]);
+
   const loadItems = useCallback(async () => {
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return setItems([]);
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) {
+        setItems([]);
+        return;
+      }
 
-    const SEL_FULL =
-      "memory_id, want_to_do, ocr_description, user_caption, files(storage_path, file_name)";
-    const SEL_LEGACY =
-      "memory_id, ocr_description, user_caption, files(storage_path, file_name)";
+      // first time we see this user this session, pull their saved URL cache off disk so cold starts can hit the cache
+      if (cachedUserIdRef.current !== user.id) {
+        signedUrlCacheRef.current = await loadSignedUrlCache(user.id);
+        cachedUserIdRef.current = user.id;
+      }
 
-    let rowsRes = await supabase
-      .from("memories")
-      .select(SEL_FULL)
-      .eq("user_id", user.id)
-      .not("file_id", "is", null)
-      .order("memory_id", { ascending: true });
+      const SEL_FULL =
+        "memory_id, want_to_do, ocr_description, user_caption, files(storage_path, file_name)";
+      const SEL_LEGACY =
+        "memory_id, ocr_description, user_caption, files(storage_path, file_name)";
 
-    if (rowsRes.error && isUndefinedColumnError(rowsRes.error, "want_to_do")) {
-      rowsRes = await supabase
+      const fullRes = await supabase
         .from("memories")
-        .select(SEL_LEGACY)
+        .select(SEL_FULL)
         .eq("user_id", user.id)
         .not("file_id", "is", null)
         .order("memory_id", { ascending: true });
-    }
 
-    if (rowsRes.error) {
-      if (__DEV__) console.warn("[archive] memories load:", rowsRes.error.message);
-      return setItems([]);
-    }
+      const rowsRes =
+        fullRes.error && isUndefinedColumnError(fullRes.error, "want_to_do")
+          ? await supabase
+              .from("memories")
+              .select(SEL_LEGACY)
+              .eq("user_id", user.id)
+              .not("file_id", "is", null)
+              .order("memory_id", { ascending: true })
+          : fullRes;
 
-    const data = rowsRes.data;
+      if (rowsRes.error) {
+        if (__DEV__) console.warn("[archive] memories load:", rowsRes.error.message);
+        setItems([]);
+        return;
+      }
 
-    const entries = ((data as MemoryFileRow[] | null) ?? []).flatMap((m) => {
-      const file = Array.isArray(m.files) ? m.files[0] : m.files;
-      if (!file) return [];
-      const want = m.want_to_do?.trim() ?? "";
-      const ocr = m.ocr_description?.trim() ?? "";
-      const cap = m.user_caption?.trim() ?? "";
-      const serverSearchText = [want, ocr, cap].filter(Boolean).join(" ");
-      return [
-        {
-          memory_id: m.memory_id,
-          storage_path: file.storage_path,
-          searchFileName: file.file_name,
-          serverSearchText,
-        },
-      ];
-    });
-    if (entries.length === 0) return setItems([]);
+      const data = rowsRes.data;
 
-    /** Shorter than 1h caused images to “disappear” (blank) after the URL expired. */
-    const SIGNED_URL_TTL_SEC = 60 * 60 * 24 * 7;
-    const { data: signed } = await supabase.storage
-      .from("memories")
-      .createSignedUrls(entries.map((e) => e.storage_path), SIGNED_URL_TTL_SEC);
+      const entries = ((data as MemoryFileRow[] | null) ?? []).flatMap((m) => {
+        const file = Array.isArray(m.files) ? m.files[0] : m.files;
+        if (!file) return [];
+        const want = m.want_to_do?.trim() ?? "";
+        const ocr = m.ocr_description?.trim() ?? "";
+        const cap = m.user_caption?.trim() ?? "";
+        const serverSearchText = [want, ocr, cap].filter(Boolean).join(" ");
+        return [
+          {
+            memory_id: m.memory_id,
+            storage_path: file.storage_path,
+            searchFileName: file.file_name,
+            serverSearchText,
+            userCaption: cap.length > 0 ? cap : null,
+            wantToDo: want,
+            ocrDescription: ocr,
+          },
+        ];
+      });
+      if (entries.length === 0) {
+        setItems([]);
+        return;
+      }
 
-    setItems(
-      (signed ?? []).flatMap((s, i) =>
-        s.signedUrl
-          ? [{
-              id: `uploaded-${entries[i].memory_id}`,
-              source: { uri: s.signedUrl },
+      // long TTL. anything shorter and images vanish when the URL expires mid-session
+      const SIGNED_URL_TTL_SEC = 60 * 60 * 24 * 7;
+      // only refresh URLs that are about to expire. keeps strings stable so the cache hits
+      const REFRESH_THRESHOLD_MS = 24 * 60 * 60 * 1000;
+
+      const now = Date.now();
+      const pathsNeedingSignedUrl: string[] = [];
+      for (const e of entries) {
+        const cached = signedUrlCacheRef.current.get(e.storage_path);
+        if (!cached || cached.expiresAt - now < REFRESH_THRESHOLD_MS) {
+          pathsNeedingSignedUrl.push(e.storage_path);
+        }
+      }
+
+      let cacheChanged = false;
+      if (pathsNeedingSignedUrl.length > 0) {
+        const { data: signed } = await supabase.storage
+          .from("memories")
+          .createSignedUrls(pathsNeedingSignedUrl, SIGNED_URL_TTL_SEC);
+        const expiresAt = now + SIGNED_URL_TTL_SEC * 1000;
+        for (const s of signed ?? []) {
+          if (s.signedUrl && s.path) {
+            signedUrlCacheRef.current.set(s.path, { url: s.signedUrl, expiresAt });
+            cacheChanged = true;
+          }
+        }
+      }
+
+      setItems(
+        entries.flatMap((e, i) => {
+          const cached = signedUrlCacheRef.current.get(e.storage_path);
+          if (!cached) return [];
+          return [
+            {
+              id: `uploaded-${e.memory_id}`,
+              source: { uri: cached.url },
               height: imageHeights[i % imageHeights.length],
-              searchFileName: entries[i].searchFileName,
-              serverSearchText: entries[i].serverSearchText,
-            }]
-          : []
-      )
-    );
+              searchFileName: e.searchFileName,
+              serverSearchText: e.serverSearchText,
+              userCaption: e.userCaption,
+              wantToDo: e.wantToDo,
+              ocrDescription: e.ocrDescription,
+            },
+          ];
+        })
+      );
+
+      // persist new URLs to disk so the next cold start can reuse them
+      if (cacheChanged) void saveSignedUrlCache(user.id, signedUrlCacheRef.current);
+    } finally {
+      setArchiveLoadGeneration((g) => g + 1);
+    }
   }, []);
 
-  useEffect(() => {
-    const { data } = supabase.auth.onAuthStateChange((event) => {
-      if (event === "SIGNED_IN" || event === "SIGNED_OUT" || event === "USER_UPDATED") {
-        void loadItems();
+  // skip the reload if we just did one. pass force=true to override (pull-to-refresh, sign-in)
+  const loadItemsIfStale = useCallback(
+    async (opts?: { force?: boolean }) => {
+      const STALE_MS = 5 * 60 * 1000;
+      const now = Date.now();
+      if (!opts?.force && lastLoadAtRef.current && now - lastLoadAtRef.current < STALE_MS) {
+        return;
       }
-    });
-    return () => data.subscription.unsubscribe();
-  }, [loadItems]);
-
-  /** Refresh file URLs and DB state when returning to this tab (signed URLs are time-limited). */
-  useFocusEffect(
-    useCallback(() => {
-      void loadItems();
-    }, [loadItems])
+      // claim early so two simultaneous calls don't both run
+      lastLoadAtRef.current = now;
+      await loadItems();
+    },
+    [loadItems]
   );
 
   useEffect(() => {
-    const raw = params.openMemory;
-    const id = raw == null ? undefined : Array.isArray(raw) ? raw[0] : raw;
-    const trimmed = id?.trim();
-    if (!trimmed || items.length === 0) return;
+    // ignore USER_UPDATED, it fires on every token refresh and was eating egress
+    const { data } = supabase.auth.onAuthStateChange((event) => {
+      if (event === "SIGNED_IN" || event === "SIGNED_OUT") {
+        // wipe the cache so we don't leak the previous user's signed URLs
+        const previousUserId = cachedUserIdRef.current;
+        signedUrlCacheRef.current.clear();
+        cachedUserIdRef.current = null;
+        lastLoadAtRef.current = 0;
+        if (previousUserId) void clearSignedUrlCache(previousUserId);
+        void loadItemsIfStale({ force: true });
+      }
+    });
+    return () => data.subscription.unsubscribe();
+  }, [loadItemsIfStale]);
 
-    const item = items.find((i) => i.id === `uploaded-${trimmed}`);
-    if (item) {
-      setSelectedItem(item);
-    }
-    router.setParams({ openMemory: undefined });
-  }, [params.openMemory, items]);
+  // reload when the tab gets focus, but only if we haven't loaded recently
+  useFocusEffect(
+    useCallback(() => {
+      void loadItemsIfStale();
+    }, [loadItemsIfStale])
+  );
 
   useEffect(() => {
-    const onChange = (state: AppStateStatus) => {
-      if (state === "active") void loadItems();
-    };
-    const sub = AppState.addEventListener("change", onChange);
-    return () => sub.remove();
-  }, [loadItems]);
+    if (!pendingOpenMemoryId) return;
+    if (archiveLoadGeneration === 0) return;
+    const targetId = `uploaded-${pendingOpenMemoryId}`;
+    const item = items.find((i) => i.id === targetId);
+    if (item) setSelectedItem(item);
+    // Clear both to be safe (some callers still use openMemory).
+    router.setParams({ openMemoryId: undefined, openMemory: undefined });
+  }, [pendingOpenMemoryId, items, archiveLoadGeneration]);
+
+  useEffect(() => {
+    if (!selectedItem?.id) {
+      setViewerCaptionDraft("");
+      return;
+    }
+    setViewerCaptionDraft(selectedItem.userCaption ?? "");
+  }, [selectedItem?.id, selectedItem?.userCaption]);
+
+  // no AppState listener. used to re-download every photo on every app foreground
 
   useEffect(() => {
     const ids = items.map((item) => ({
@@ -297,11 +440,9 @@ export default function ArchiveTab() {
   }, [indexPayload]);
 
   const searchResults = useMemo(
-    () => searchAndRankArchiveRows(indexRows, searchQuery, themeFilter),
-    [indexRows, searchQuery, themeFilter]
+    () => searchAndRankArchiveRows(indexRows, searchQuery, "all"),
+    [indexRows, searchQuery]
   );
-
-  const themeOptions = useMemo(() => distinctThemes(indexRows), [indexRows]);
 
   const itemsById = useMemo(
     () => new Map(items.map((item) => [item.id, item] as const)),
@@ -332,7 +473,14 @@ export default function ArchiveTab() {
         quality: 1,
       });
       if (picked.canceled || !picked.assets.length) return;
-      setPendingAsset(picked.assets[0]);
+      const selected = picked.assets[0];
+      setPendingAsset({
+        uri: selected.uri,
+        fileName: selected.fileName,
+        mimeType: selected.mimeType,
+        width: selected.width,
+        height: selected.height,
+      });
     } catch {
       fail("Could not open photo library.");
     }
@@ -353,25 +501,40 @@ export default function ArchiveTab() {
       const sanitizedBaseName = rawName
         .replace(/[^\w.\-]/g, "_")
         .replace(/\.(heic|heif|png|jpg|jpeg)$/i, "");
-      let fileName = `${Date.now()}-${rawName.replace(/[^\w.\-]/g, "_")}`;
-      let contentType = "image/jpeg";
-      let uploadUri = asset.uri;
+      const wasJpeg = isJpegAsset(asset.mimeType, rawName);
+      // keep the original extension when we can so dedup against older uploads still matches
+      const fileName = wasJpeg
+        ? `${Date.now()}-${rawName.replace(/[^\w.\-]/g, "_")}`
+        : `${Date.now()}-${sanitizedBaseName}.jpeg`;
+      const contentType = "image/jpeg";
 
-      if (!isJpegAsset(asset.mimeType, rawName)) {
-        const converted = await ImageManipulator.manipulateAsync(
-          asset.uri,
-          [],
-          { compress: 1, format: ImageManipulator.SaveFormat.JPEG }
-        );
-        uploadUri = converted.uri;
-        fileName = `${Date.now()}-${sanitizedBaseName}.jpeg`;
+      // shrink huge phone photos and recompress so we're not storing 4MB JPEGs
+      const TARGET_LONGEST_PX = 1920;
+      const longestDim = Math.max(asset.width || 0, asset.height || 0);
+      const actions: ImageManipulator.Action[] = [];
+      if (asset.width && asset.height && longestDim > TARGET_LONGEST_PX) {
+        // scale so the longest side is TARGET_LONGEST_PX, aspect ratio preserved
+        const scale = TARGET_LONGEST_PX / longestDim;
+        actions.push({
+          resize: {
+            width: Math.round(asset.width * scale),
+            height: Math.round(asset.height * scale),
+          },
+        });
       }
+      const processed = await ImageManipulator.manipulateAsync(
+        asset.uri,
+        actions,
+        { compress: 0.7, format: ImageManipulator.SaveFormat.JPEG }
+      );
+      const uploadUri = processed.uri;
 
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return fail("Could not identify the current user.");
 
+      // skip the upload entirely if we've already got this filename for this user
       if (asset.fileName) {
-        const sanitizedName = isJpegAsset(asset.mimeType, rawName)
+        const sanitizedName = wasJpeg
           ? asset.fileName.replace(/[^\w.\-]/g, "_")
           : `${sanitizedBaseName}.jpeg`;
         const { data: existing } = await supabase
@@ -545,26 +708,37 @@ export default function ArchiveTab() {
 
   const performDeleteItem = useCallback(async (itemId: string) => {
     const memoryId = itemId.replace(/^uploaded-/, "");
-    const { data: memory } = await supabase
+    const { data: memory, error: memoryLookupErr } = await supabase
       .from("memories")
       .select("file_id")
       .eq("memory_id", memoryId)
       .single();
 
-    if (memory?.file_id) {
-      const { data: fileRecord } = await supabase
+    if (memoryLookupErr) throw memoryLookupErr;
+    if (!memory) throw new Error("Photo not found.");
+
+    if (memory.file_id) {
+      const { data: fileRecord, error: fileErr } = await supabase
         .from("files")
         .select("storage_path")
         .eq("file_id", memory.file_id)
         .single();
 
+      if (fileErr) throw fileErr;
+
       if (fileRecord?.storage_path) {
-        await supabase.storage.from("memories").remove([fileRecord.storage_path]);
+        const { error: storageErr } = await supabase.storage
+          .from("memories")
+          .remove([fileRecord.storage_path]);
+        if (storageErr) throw storageErr;
       }
 
-      await supabase.from("files").delete().eq("file_id", memory.file_id);
+      const { error: delFileErr } = await supabase.from("files").delete().eq("file_id", memory.file_id);
+      if (delFileErr) throw delFileErr;
     }
-    await supabase.from("memories").delete().eq("memory_id", memoryId);
+
+    const { error: delMemoryErr } = await supabase.from("memories").delete().eq("memory_id", memoryId);
+    if (delMemoryErr) throw delMemoryErr;
 
     const updated = await removeSupplementalSearchText(itemId);
     setSupplementalSearchById(updated);
@@ -573,17 +747,56 @@ export default function ArchiveTab() {
     setBulkSelectedIds((ids) => ids.filter((x) => x !== itemId));
   }, []);
 
-  const handleDeletePhoto = useCallback(async () => {
-    if (!selectedItem) return;
+  const handleDeletePhotoById = useCallback(async (itemId: string) => {
     setIsDeleting(true);
     try {
-      await performDeleteItem(selectedItem.id);
+      await performDeleteItem(itemId);
     } catch {
       Alert.alert("Error", "Could not delete this photo.");
     } finally {
       setIsDeleting(false);
     }
-  }, [selectedItem, performDeleteItem]);
+  }, [performDeleteItem]);
+
+  const handleSaveViewerCaption = useCallback(async () => {
+    if (!selectedItem) return;
+    const memoryId = selectedItem.id.replace(/^uploaded-/, "");
+    const trimmed = viewerCaptionDraft.trim();
+    const newCaption = trimmed.length > 0 ? trimmed : null;
+    const prevTrimmed = (selectedItem.userCaption ?? "").trim();
+    if (trimmed === prevTrimmed) return;
+
+    setIsSavingCaption(true);
+    try {
+      const { error } = await supabase
+        .from("memories")
+        .update({ user_caption: newCaption })
+        .eq("memory_id", memoryId);
+      if (error) {
+        Alert.alert("Could not save", error.message);
+        return;
+      }
+      const want = selectedItem.wantToDo;
+      const ocr = selectedItem.ocrDescription;
+      const serverSearchText = [want, ocr, trimmed].filter(Boolean).join(" ");
+      setItems((prev) =>
+        prev.map((i) =>
+          i.id === selectedItem.id
+            ? { ...i, userCaption: newCaption, serverSearchText }
+            : i
+        )
+      );
+      setSelectedItem((cur) =>
+        cur && cur.id === selectedItem.id
+          ? { ...cur, userCaption: newCaption, serverSearchText }
+          : cur
+      );
+    } catch {
+      Alert.alert("Could not save", "Something went wrong. Try again.");
+    } finally {
+      setIsSavingCaption(false);
+    }
+  }, [selectedItem, viewerCaptionDraft]);
 
   const closeAccountMenu = useCallback(() => {
     setAccountMenuOpen(false);
@@ -681,7 +894,10 @@ export default function ArchiveTab() {
           <Image
             source={item.source}
             style={{ width: "100%", height: item.height }}
-            resizeMode="cover"
+            contentFit="cover"
+            // keep in RAM for the session and on disk between launches
+            cachePolicy="memory-disk"
+            transition={150}
           />
           {isSelecting ? (
             <View className="absolute right-2 top-2 h-7 w-7 items-center justify-center rounded-full border-2 border-white bg-black/35">
@@ -707,14 +923,18 @@ export default function ArchiveTab() {
     return { left, top };
   }, [ACCOUNT_MENU_W, accountMenuAnchor, windowWidth]);
 
+  const viewerImageMaxH = Math.min(320, Math.round(windowHeight * 0.4));
+  const viewerCaptionDirty =
+    Boolean(selectedItem) &&
+    viewerCaptionDraft.trim() !== (selectedItem?.userCaption ?? "").trim();
+
   return (
     <View className="flex-1 bg-[#F4F0EA]">
       <SafeAreaView className="flex-1 bg-[#F4F0EA]" edges={["left", "right"]}>
         <View className="flex-1">
           <View className="px-5">
             <View className="pt-1.5">
-              <View className="flex-row items-center justify-between">
-                <Text className="text-sm font-medium text-[#5F5F5F]">Your saves</Text>
+              <View className="flex-row items-center justify-end">
                 {!isSelecting ? (
                   <View className="flex-row items-center gap-1">
                     <MiniChatWindow />
@@ -763,7 +983,7 @@ export default function ArchiveTab() {
                 value={searchQuery}
                 onChangeText={setSearchQuery}
                 editable={!isSelecting}
-                placeholder="Search titles, tags, categories…"
+                placeholder="Search titles, tags…"
                 placeholderTextColor="rgba(95, 95, 95, 0.55)"
                 multiline={false}
                 autoCorrect={false}
@@ -790,66 +1010,32 @@ export default function ArchiveTab() {
                 refreshing={isRefreshing}
                 onRefresh={() => {
                   setIsRefreshing(true);
-                  void loadItems().finally(() => setIsRefreshing(false));
+                  // pull-to-refresh, always actually refetch
+                  void loadItemsIfStale({ force: true }).finally(() =>
+                    setIsRefreshing(false)
+                  );
                 }}
               />
             }
           >
-            <Text className="mt-4 text-xs font-semibold uppercase tracking-[0.2em] text-[#6B6B6B]">Categories</Text>
-            <View className="mt-2.5 flex-row items-center gap-2">
-              <ScrollView
-                horizontal
-                showsHorizontalScrollIndicator={false}
-                className="min-w-0 flex-1"
-                contentContainerClassName="flex-row flex-nowrap items-center gap-2 pr-1"
-                pointerEvents={isSelecting ? "none" : "auto"}
-              >
-                <Pressable
-                  onPress={() => setThemeFilter("all")}
-                  className={`rounded-full px-4 py-2 ${
-                    themeFilter === "all" ? "bg-[#0B0B0B]" : "border border-[#E6E1DA] bg-white"
-                  }`}
-                >
-                  <Text
-                    className={`text-sm font-semibold ${
-                      themeFilter === "all" ? "text-white" : "text-[#0B0B0B]"
-                    }`}
-                  >
-                    All
-                  </Text>
-                </Pressable>
-                {themeOptions.map((theme) => {
-                  const active = themeFilter === theme;
-                  return (
-                    <Pressable
-                      key={theme}
-                      onPress={() => setThemeFilter(active ? "all" : theme)}
-                      className={`rounded-full px-4 py-2 ${
-                        active ? "bg-[#0B0B0B]" : "border border-[#E6E1DA] bg-white"
-                      }`}
-                    >
-                      <Text
-                        className={`text-sm font-semibold capitalize ${
-                          active ? "text-white" : "text-[#0B0B0B]"
-                        }`}
-                      >
-                        {theme}
-                      </Text>
-                    </Pressable>
-                  );
-                })}
-              </ScrollView>
+            <View className="mt-4 flex-row justify-end">
               {isSelecting || gridCells.length > 0 ? (
                 <Pressable
                   onPress={isSelecting ? clearSelection : enterSelectMode}
-                  accessibilityLabel={isSelecting ? "Cancel selection" : "Select photos"}
-                  className="h-9 w-9 shrink-0 items-center justify-center rounded-full border border-[#DED9D0] bg-white shadow-sm active:bg-[#F0EBE2]"
+                  accessibilityLabel={isSelecting ? "Cancel" : "Select"}
+                  accessibilityHint={
+                    isSelecting ? "Stop choosing photos to delete" : "Choose photos to delete or manage"
+                  }
+                  className="shrink-0 flex-row items-center gap-2 rounded-full border border-[#DED9D0] bg-white px-3.5 py-2 shadow-sm active:bg-[#F0EBE2]"
                 >
                   <Ionicons
-                    name={isSelecting ? "close" : "checkmark-circle-outline"}
-                    size={isSelecting ? 22 : 20}
+                    name={isSelecting ? "close" : "images-outline"}
+                    size={isSelecting ? 20 : 19}
                     color={isSelecting ? "#5C534A" : "#1A1A1A"}
                   />
+                  <Text className="text-sm font-semibold text-[#0B0B0B]">
+                    {isSelecting ? "Cancel" : "Select"}
+                  </Text>
                 </Pressable>
               ) : null}
             </View>
@@ -859,17 +1045,14 @@ export default function ArchiveTab() {
                 <Text className="text-center text-sm text-[#5F5F5F]">
                   {items.length === 0
                     ? "No uploads yet. Tap Add to library to add your first image."
-                    : "Nothing matches this search or filter. New uploads are often under “All” and “life” until tags catch up — or your search is hiding them."}
+                    : "Nothing matches this search. Try different words — or wait for tags to update on new uploads."}
                 </Text>
-                {items.length > 0 && (searchQuery.trim().length > 0 || themeFilter !== "all") ? (
+                {items.length > 0 && searchQuery.trim().length > 0 ? (
                   <Pressable
-                    onPress={() => {
-                      setSearchQuery("");
-                      setThemeFilter("all");
-                    }}
+                    onPress={() => setSearchQuery("")}
                     className="mt-3 rounded-full border border-[#DED9D0] bg-white px-4 py-2 active:bg-[#F0EBE2]"
                   >
-                    <Text className="text-sm font-semibold text-[#0B0B0B]">Show all photos</Text>
+                    <Text className="text-sm font-semibold text-[#0B0B0B]">Clear search</Text>
                   </Pressable>
                 ) : null}
               </View>
@@ -914,50 +1097,118 @@ export default function ArchiveTab() {
           </View>
         ) : null}
 
-        <Modal visible={!!selectedItem} transparent animationType="fade" onRequestClose={() => setSelectedItem(null)}>
-          <View className="flex-1">
-            <Pressable
-              accessibilityLabel="Close image"
-              onPress={() => setSelectedItem(null)}
-              className="absolute inset-0 bg-black/60"
-            />
-            <View className="absolute inset-0 items-center justify-center" pointerEvents="box-none">
-              {selectedItem ? (
-                <View
-                  className="overflow-hidden rounded-2xl bg-black"
-                  style={{ width: "85%", height: "70%" }}
-                >
-                  <View className="flex-1">
-                    <Image
-                      source={selectedItem.source}
-                      style={{ width: "100%", height: "100%" }}
-                      resizeMode="contain"
-                    />
-                    <Pressable
-                      accessibilityLabel="Close"
-                      onPress={() => setSelectedItem(null)}
-                      className="absolute left-2 top-2 h-8 w-8 items-center justify-center rounded-full bg-black/50 active:opacity-80"
+        <Modal
+          visible={!!selectedItem}
+          transparent
+          animationType="fade"
+          onRequestClose={() => {
+            if (!isSavingCaption) setSelectedItem(null);
+          }}
+        >
+          <KeyboardAvoidingView
+            behavior={Platform.OS === "ios" ? "padding" : undefined}
+            className="flex-1"
+          >
+            <View className="flex-1 justify-center px-4">
+              <Pressable
+                accessibilityLabel="Close image"
+                disabled={isSavingCaption}
+                onPress={() => {
+                  if (!isSavingCaption) setSelectedItem(null);
+                }}
+                className="absolute inset-0 z-0 bg-black/60"
+              />
+              <View className="z-10 items-center" pointerEvents="box-none">
+                {selectedItem ? (
+                  <View
+                    className="w-full max-w-md overflow-hidden rounded-2xl bg-[#FFFCF8]"
+                    style={{ maxHeight: windowHeight * 0.92 }}
+                  >
+                    <ScrollView
+                      keyboardShouldPersistTaps="handled"
+                      showsVerticalScrollIndicator={false}
+                      contentContainerStyle={{ paddingBottom: 16 }}
                     >
-                      <Text className="text-base font-bold leading-none text-white">×</Text>
-                    </Pressable>
-                    <Pressable
-                      accessibilityLabel="Delete photo"
-                      disabled={isDeleting}
-                      onPress={() =>
-                        Alert.alert("Delete photo", "This will permanently delete this photo.", [
-                          { text: "Cancel", style: "cancel" },
-                          { text: "Delete", style: "destructive", onPress: () => void handleDeletePhoto() },
-                        ])
-                      }
-                      className="absolute right-2 top-2 h-8 w-8 items-center justify-center rounded-full bg-black/50 active:opacity-80 disabled:opacity-40"
-                    >
-                      <Ionicons name="trash-outline" size={18} color="#fff" />
-                    </Pressable>
+                      <View
+                        className="relative w-full items-center bg-black"
+                        style={{ height: viewerImageMaxH }}
+                        collapsable={false}
+                      >
+                        <Image
+                          source={selectedItem.source}
+                          style={{ width: "100%", height: viewerImageMaxH }}
+                          contentFit="contain"
+                          cachePolicy="memory-disk"
+                          pointerEvents="none"
+                        />
+                        <Pressable
+                          accessibilityLabel="Close"
+                          disabled={isSavingCaption}
+                          onPress={() => {
+                            if (!isSavingCaption) setSelectedItem(null);
+                          }}
+                          hitSlop={12}
+                          className="absolute left-2 top-2 z-20 h-10 w-10 items-center justify-center rounded-full bg-black/50 active:opacity-80"
+                        >
+                          <Text className="text-base font-bold leading-none text-white">×</Text>
+                        </Pressable>
+                        <Pressable
+                          accessibilityLabel="Delete photo"
+                          disabled={isDeleting || isSavingCaption}
+                          hitSlop={12}
+                          onPress={() => {
+                            const itemIdToDelete = selectedItem.id;
+                            Alert.alert(
+                              "Delete photo",
+                              "This will permanently delete this photo.",
+                              [
+                                { text: "Cancel", style: "cancel" },
+                                {
+                                  text: "Delete",
+                                  style: "destructive",
+                                  onPress: () => void handleDeletePhotoById(itemIdToDelete),
+                                },
+                              ]
+                            );
+                          }}
+                          className="absolute right-2 top-2 z-20 h-10 w-10 items-center justify-center rounded-full bg-black/50 active:opacity-80 disabled:opacity-40"
+                        >
+                          <Ionicons name="trash-outline" size={18} color="#fff" />
+                        </Pressable>
+                      </View>
+                      <View className="px-4 pt-4">
+                        <Text className="mb-1.5 text-[11px] font-semibold uppercase tracking-[0.12em] text-[#6B6B6B]">
+                          Your comment
+                        </Text>
+                        <TextInput
+                          value={viewerCaptionDraft}
+                          onChangeText={setViewerCaptionDraft}
+                          placeholder="Add a comment…"
+                          placeholderTextColor="rgba(95,95,95,0.45)"
+                          multiline
+                          editable={!isSavingCaption}
+                          className="min-h-[88px] rounded-xl border border-[#E6E1DA] bg-white px-3 py-3 text-base leading-6 text-[#0B0B0B]"
+                          style={Platform.OS === "android" ? searchInputStyles.android : undefined}
+                          textAlignVertical="top"
+                        />
+                        <Pressable
+                          accessibilityRole="button"
+                          accessibilityLabel="Save comment"
+                          disabled={!viewerCaptionDirty || isSavingCaption}
+                          onPress={() => void handleSaveViewerCaption()}
+                          className="mt-3 self-end rounded-full bg-[#0B0B0B] px-5 py-2.5 active:opacity-80 disabled:opacity-40"
+                        >
+                          <Text className="text-sm font-semibold text-white">
+                            {isSavingCaption ? "Saving…" : "Save"}
+                          </Text>
+                        </Pressable>
+                      </View>
+                    </ScrollView>
                   </View>
-                </View>
-              ) : null}
+                ) : null}
+              </View>
             </View>
-          </View>
+          </KeyboardAvoidingView>
         </Modal>
 
         <Modal
@@ -1053,7 +1304,7 @@ export default function ArchiveTab() {
                 <Image
                   source={{ uri: pendingAsset.uri }}
                   style={{ width: "100%", height: 120, borderRadius: 12, marginBottom: 16 }}
-                  resizeMode="cover"
+                  contentFit="cover"
                 />
               ) : null}
               <Text className="mb-2 text-base font-black text-black">Add a caption</Text>

@@ -27,6 +27,54 @@ function splitBoldParts(line: string): Part[] {
   return tokens.map((t, i) => ({ text: t, bold: i % 2 === 1 }));
 }
 
+export type StructuredItem = { title: string; body: string };
+export type StructuredReply = { intro: string; items: StructuredItem[] };
+
+const STRUCTURED_ITEM_RE =
+  /^\s*\d+[.)]\s*\*\*(.+?)\*\*\s*[—–\-:]\s*(.+)$/;
+
+export function splitConvoBubbles(text: string): string[] {
+  const parts = text
+    .split(/\n{2,}/)
+    .map((p) => p.trim())
+    .filter(Boolean);
+  if (parts.length <= 1) return [text.trim()];
+  const merged: string[] = [];
+  for (const p of parts) {
+    if (merged.length > 0 && p.length < 12) {
+      merged[merged.length - 1] += " " + p;
+    } else {
+      merged.push(p);
+    }
+  }
+  return merged.slice(0, 3);
+}
+
+export function parseStructuredReply(text: string): StructuredReply | null {
+  const lines = text.split(/\n/);
+  const matched: { lineIndex: number; title: string; bodyLine: string }[] = [];
+
+  for (let i = 0; i < lines.length; i += 1) {
+    const m = lines[i].match(STRUCTURED_ITEM_RE);
+    if (m) matched.push({ lineIndex: i, title: m[1].trim(), bodyLine: m[2].trim() });
+  }
+
+  if (matched.length < 3) return null;
+
+  const items: StructuredItem[] = matched.map((row, j) => {
+    const afterLine = row.lineIndex + 1;
+    const untilNext =
+      j + 1 < matched.length ? matched[j + 1].lineIndex : lines.length;
+    const tail = lines.slice(afterLine, untilNext).join("\n").trim();
+    const body = tail ? `${row.bodyLine}\n${tail}`.trim() : row.bodyLine;
+    return { title: row.title, body };
+  });
+
+  const intro = lines.slice(0, matched[0].lineIndex).join("\n").trim();
+
+  return { intro, items };
+}
+
 export function MarkdownishBoldLine({
   line,
   className,
