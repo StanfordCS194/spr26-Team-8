@@ -327,8 +327,7 @@ export default function ActionTab() {
       >
         <View className="flex-1 bg-[#F4F0EA]">
           <SafeAreaView className="flex-1 bg-[#F4F0EA]" edges={["left", "right", "bottom"]}>
-            <Text className="px-5 pt-2 text-sm font-medium text-[#5F5F5F]">Assistant</Text>
-            <Text className="px-5 pt-1 text-4xl font-bold tracking-[-0.5px] text-[#0B0B0B]">Action</Text>
+            <Text className="px-5 pt-2 text-4xl font-bold tracking-[-0.5px] text-[#0B0B0B]">Action</Text>
             <Text className="px-5 pb-2 pt-1 text-xs font-medium uppercase tracking-[0.2em] text-[#6B6B6B]">
               Memory-aware assistant
             </Text>

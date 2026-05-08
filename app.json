@@ -39,10 +39,19 @@
     "plugins": [
       "expo-router",
       [
+        "expo-image-picker",
+        {
+          "photosPermission": "Venn needs access to your photo library so you can upload memories.",
+          "cameraPermission": false,
+          "microphonePermission": false
+        }
+      ],
+      [
         "expo-sharing",
         {
           "ios": {
             "enabled": true,
+            "appGroupIdentifier": "group.com.cheetahspeed.Venn",
             "activationRule": {
               "supportsImageWithMaxCount": 5
             }
@@ -64,9 +73,9 @@
           "image": "./assets/images/splash-icon.png",
           "imageWidth": 200,
           "resizeMode": "contain",
-          "backgroundColor": "#ffffff",
+          "backgroundColor": "#F4F0EA",
           "dark": {
-            "backgroundColor": "#000000"
+            "backgroundColor": "#F4F0EA"
           }
         }
       ],

@@ -162,8 +162,7 @@ export default function NotificationsTab() {
   return (
     <View className="flex-1 bg-[#F4F0EA]">
       <SafeAreaView className="flex-1 bg-[#F4F0EA]" edges={["left", "right", "bottom"]}>
-        <View className="flex-row items-center justify-between px-5 pt-2">
-          <Text className="text-sm font-medium text-[#5F5F5F]">Assistant</Text>
+        <View className="flex-row items-center justify-end px-5 pt-2">
           <MiniChatWindow />
         </View>
         <Text className="px-5 pt-1 text-4xl font-bold tracking-[-0.5px] text-[#0B0B0B]">Inbox</Text>
