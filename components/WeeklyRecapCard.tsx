@@ -380,7 +380,7 @@ export function WeeklyRecapCard({
                       if (action === "library" && nudge.memoryId) {
                         router.push({
                           pathname: "/archive",
-                          params: { openMemory: nudge.memoryId },
+                          params: { openMemoryId: nudge.memoryId },
                         });
                         return;
                       }

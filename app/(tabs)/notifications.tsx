@@ -257,7 +257,7 @@ export default function NotificationsTab() {
                                 if (action === "library" && nudge.memoryId) {
                                   router.push({
                                     pathname: "/archive",
-                                    params: { openMemory: nudge.memoryId },
+                                    params: { openMemoryId: nudge.memoryId },
                                   });
                                   return;
                                 }
