@@ -39,6 +39,14 @@
     "plugins": [
       "expo-router",
       [
+        "expo-image-picker",
+        {
+          "photosPermission": "Venn needs access to your photo library so you can upload memories.",
+          "cameraPermission": false,
+          "microphonePermission": false
+        }
+      ],
+      [
         "expo-sharing",
         {
           "ios": {
