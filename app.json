@@ -43,6 +43,7 @@
         {
           "ios": {
             "enabled": true,
+            "appGroupIdentifier": "group.com.cheetahspeed.Venn",
             "activationRule": {
               "supportsImageWithMaxCount": 5
             }
