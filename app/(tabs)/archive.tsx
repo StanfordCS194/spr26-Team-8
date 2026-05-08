@@ -929,8 +929,7 @@ export default function ArchiveTab() {
         <View className="flex-1">
           <View className="px-5">
             <View className="pt-1.5">
-              <View className="flex-row items-center justify-between">
-                <Text className="text-sm font-medium text-[#5F5F5F]">Your saves</Text>
+              <View className="flex-row items-center justify-end">
                 {!isSelecting ? (
                   <View className="flex-row items-center gap-1">
                     <MiniChatWindow />
