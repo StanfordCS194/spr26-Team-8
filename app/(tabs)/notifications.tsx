@@ -1,6 +1,11 @@
 import { MarkdownishBoldLine } from "@/components/MarkdownishBoldLine";
 import { MiniChatWindow } from "@/components/MiniChatWindow";
 import { exportChatTextToFile } from "@/lib/chatExport";
+import {
+  parseWeeklyRecapBullets,
+  resolveNudgeTapAction,
+  type ParsedNudgeBullet,
+} from "@/lib/nudgeBullet";
 import { buildTentativePlanPrompt } from "@/lib/nudgePrompt";
 import {
   loadSavedChatOutputs,
@@ -26,25 +31,13 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { supabase } from "@/lib/supabase";
 
-function parseBulletLines(raw: string): string[] {
-  return raw
-    .split(/\n/)
-    .map((line) =>
-      line
-        .replace(/^\s*[-*•]\s*/, "")
-        .replace(/^\s*\d+[.)]\s*/, "")
-        .trim()
-    )
-    .filter((line) => line.length > 0);
-}
-
 export default function NotificationsTab() {
   const router = useRouter();
   const [loading, setLoading] = useState(true);
   const [pullRefreshing, setPullRefreshing] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [nudges, setNudges] = useState<string[]>([]);
+  const [nudges, setNudges] = useState<ParsedNudgeBullet[]>([]);
   const [saved, setSaved] = useState<SavedChatOutput[]>([]);
   const [selectedSaved, setSelectedSaved] = useState<SavedChatOutput | null>(null);
 
@@ -89,7 +82,7 @@ export default function NotificationsTab() {
         return;
       }
       const row = await fetchWeeklyRecap(utcWeekAnchorMonday());
-      setNudges(row ? parseBulletLines(row.bullets) : []);
+      setNudges(row ? parseWeeklyRecapBullets(row.bullets) : []);
       setSaved(await loadSavedChatOutputs());
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not load notifications.");
@@ -111,7 +104,7 @@ export default function NotificationsTab() {
     setError(null);
     try {
       const row = await generateWeeklyRecap();
-      setNudges(row ? parseBulletLines(row.bullets) : []);
+      setNudges(row ? parseWeeklyRecapBullets(row.bullets) : []);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not generate notifications.");
     } finally {
@@ -189,7 +182,27 @@ export default function NotificationsTab() {
               </View>
             ) : (
               <View className="mt-3 gap-2.5">
-                {nudges.map((line, idx) => {
+                {nudges.map((nudge, idx) => {
+                  const line = nudge.displayLine;
+                  const action = resolveNudgeTapAction(nudge);
+                  const iconName =
+                    action === "library"
+                      ? "image-outline"
+                      : action === "none"
+                        ? "information-circle-outline"
+                        : "sparkles-outline";
+                  const body = (
+                    <View className="flex-row items-start gap-1">
+                      <MarkdownishBoldLine
+                        line={line}
+                        className="min-w-0 flex-1 text-[15px] leading-[22px] text-[#1A1A1A]"
+                        boldClassName="font-semibold"
+                      />
+                      {action === "chat" || action === "library" ? (
+                        <Ionicons name="chevron-forward" size={16} color="#8A8278" />
+                      ) : null}
+                    </View>
+                  );
                   return (
                     <View
                       key={`${idx}-${line.slice(0, 24)}`}
@@ -197,32 +210,42 @@ export default function NotificationsTab() {
                     >
                       <View className="flex-row items-start gap-2.5">
                         <View className="mt-0.5 h-6 w-6 shrink-0 items-center justify-center rounded-full bg-black/5">
-                          <Ionicons name="sparkles-outline" size={14} color="#0B0B0B" />
+                          <Ionicons name={iconName} size={14} color="#0B0B0B" />
                         </View>
                         <View className="min-w-0 flex-1">
-                          <Pressable
-                            accessibilityRole="button"
-                            accessibilityLabel="Get a tentative plan in chat"
-                            onPress={() => {
-                              router.push({
-                                pathname: "/action",
-                                params: {
-                                  prompt: buildTentativePlanPrompt(line),
-                                  autosend: "1",
-                                },
-                              });
-                            }}
-                            className="active:opacity-80"
-                          >
-                            <View className="flex-row items-start gap-1">
-                              <MarkdownishBoldLine
-                                line={line}
-                                className="min-w-0 flex-1 text-[15px] leading-[22px] text-[#1A1A1A]"
-                                boldClassName="font-semibold"
-                              />
-                              <Ionicons name="chevron-forward" size={16} color="#8A8278" />
+                          {action === "none" ? (
+                            <View accessibilityRole="text" accessibilityLabel={`Tip: ${line}`}>
+                              {body}
                             </View>
-                          </Pressable>
+                          ) : (
+                            <Pressable
+                              accessibilityRole="button"
+                              accessibilityLabel={
+                                action === "library"
+                                  ? "Open source image in Library"
+                                  : "Get a tentative plan in chat"
+                              }
+                              onPress={() => {
+                                if (action === "library" && nudge.memoryId) {
+                                  router.push({
+                                    pathname: "/archive",
+                                    params: { openMemory: nudge.memoryId },
+                                  });
+                                  return;
+                                }
+                                router.push({
+                                  pathname: "/action",
+                                  params: {
+                                    prompt: buildTentativePlanPrompt(line),
+                                    autosend: "1",
+                                  },
+                                });
+                              }}
+                              className="active:opacity-80"
+                            >
+                              {body}
+                            </Pressable>
+                          )}
                         </View>
                       </View>
                     </View>

@@ -24,6 +24,7 @@ import { posthog } from "@/lib/posthog";
 import { supabase } from "@/lib/supabase";
 import { isUndefinedColumnError } from "@/lib/supabaseSchema";
 import { useFocusEffect } from "@react-navigation/native";
+import { router, useLocalSearchParams } from "expo-router";
 import { decode } from "base64-arraybuffer";
 import { Ionicons } from "@expo/vector-icons";
 import * as FileSystem from "expo-file-system/legacy";
@@ -105,6 +106,7 @@ const searchInputStyles = StyleSheet.create({
 });
 
 export default function ArchiveTab() {
+  const params = useLocalSearchParams<{ openMemory?: string | string[] }>();
   const [items, setItems] = useState<BoardItem[]>([]);
   const [meta, setMeta] = useState<Record<string, ArchiveItemMeta>>({});
   const [themeOverrides, setThemeOverrides] = useState<Record<string, string>>({});
@@ -229,6 +231,19 @@ export default function ArchiveTab() {
       void loadItems();
     }, [loadItems])
   );
+
+  useEffect(() => {
+    const raw = params.openMemory;
+    const id = raw == null ? undefined : Array.isArray(raw) ? raw[0] : raw;
+    const trimmed = id?.trim();
+    if (!trimmed || items.length === 0) return;
+
+    const item = items.find((i) => i.id === `uploaded-${trimmed}`);
+    if (item) {
+      setSelectedItem(item);
+    }
+    router.setParams({ openMemory: undefined });
+  }, [params.openMemory, items]);
 
   useEffect(() => {
     const onChange = (state: AppStateStatus) => {
