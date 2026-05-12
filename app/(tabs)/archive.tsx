@@ -19,7 +19,7 @@ import { fetchEmbeddingThemeOverrides } from "@/lib/embeddingThemes";
 import { MiniChatWindow } from "@/components/MiniChatWindow";
 import { getWeeklyNudgeEnabled, setWeeklyNudgeEnabled } from "@/lib/nudgePrefs";
 import { extractSearchableTextFromImage } from "@/lib/vision";
-import { posthog } from "@/lib/posthog";
+import { track } from "@/lib/posthog";
 import { supabase } from "@/lib/supabase";
 import { isUndefinedColumnError } from "@/lib/supabaseSchema";
 import {
@@ -381,7 +381,11 @@ export default function ArchiveTab() {
     if (archiveLoadGeneration === 0) return;
     const targetId = `uploaded-${pendingOpenMemoryId}`;
     const item = items.find((i) => i.id === targetId);
-    if (item) setSelectedItem(item);
+    if (item) {
+      setSelectedItem(item);
+      // tracks revisits-within-7d when joined with photo_uploaded in PostHog
+      track("memory_opened", { memory_id: pendingOpenMemoryId, source: "deep_link" });
+    }
     // Clear both to be safe (some callers still use openMemory).
     router.setParams({ openMemoryId: undefined, openMemory: undefined });
   }, [pendingOpenMemoryId, items, archiveLoadGeneration]);
@@ -697,7 +701,7 @@ export default function ArchiveTab() {
         return fail("Upload succeeded but could not save OCR description.");
       }
       setSupplementalSearchById(await upsertSupplementalSearchText(newId, visionText));
-      posthog.capture("photo_uploaded");
+      track("photo_uploaded", { memory_id: memoryRow.memory_id });
       void loadItems();
     } catch {
       fail("Could not upload this file.");
@@ -879,7 +883,15 @@ export default function ArchiveTab() {
     return (
       <Pressable
         key={item.id}
-        onPress={() => (isSelecting ? toggleBulkSelect(item.id) : setSelectedItem(item))}
+        onPress={() => {
+          if (isSelecting) {
+            toggleBulkSelect(item.id);
+            return;
+          }
+          setSelectedItem(item);
+          // strip "uploaded-" so the id joins with photo_uploaded payloads
+          track("memory_opened", { memory_id: item.id.replace(/^uploaded-/, ""), source: "grid" });
+        }}
         onLongPress={() => {
           if (!isSelecting) {
             setIsSelecting(true);

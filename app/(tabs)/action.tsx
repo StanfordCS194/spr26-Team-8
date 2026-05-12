@@ -6,7 +6,7 @@ import {
   fetchRelatedMemoryThumbnails,
 } from "@/lib/fetchMemoryThumbnailUrls";
 import { CHAT_PROMPTS, sendChatMessage } from "@/lib/chat";
-import { posthog } from "@/lib/posthog";
+import { track } from "@/lib/posthog";
 import { removeSavedChatOutput, saveChatOutput, suggestSavedChatOutputTitle } from "@/lib/savedChatOutputs";
 import { Ionicons } from "@expo/vector-icons";
 import { useFocusEffect } from "@react-navigation/native";
@@ -137,6 +137,12 @@ export default function ActionTab() {
         const savedItem = allSaved.find((item) => item.full_text.trim() === messageText.trim());
         if (!savedItem) return;
         setSavedMessageIds((prev) => ({ ...prev, [messageId]: savedItem.id }));
+        // counts only the actual save, not an unsave
+        track("chat_response_saved", {
+          chat_session_id: chatSessionId,
+          message_id: messageId,
+          saved_id: savedItem.id,
+        });
       });
     };
     const suggested = suggestSavedChatOutputTitle(messageText);
@@ -154,7 +160,7 @@ export default function ActionTab() {
       return;
     }
     saveWithTitle(suggested);
-  }, [savedMessageIds]);
+  }, [savedMessageIds, chatSessionId]);
 
   const makeMessage = useCallback(
     (
@@ -188,7 +194,7 @@ export default function ActionTab() {
           makeMessage("user", trimmed, attachedUris.length ? attachedUris : undefined),
         ]);
       }
-      posthog.capture("chat_message_sent", {
+      track("chat_message_sent", {
         chat_session_id: chatSessionId,
         silent_handoff: silent ? 1 : 0,
         image_count: attachedUris.length,
@@ -432,7 +438,13 @@ export default function ActionTab() {
                           <Pressable
                             accessibilityRole="button"
                             accessibilityLabel="Copy chat output"
-                            onPress={() => void copyChatOutput(msg.text)}
+                            onPress={() => {
+                              track("chat_response_copied", {
+                                chat_session_id: chatSessionId,
+                                message_id: msg.id,
+                              });
+                              void copyChatOutput(msg.text);
+                            }}
                             className="flex-row items-center gap-1 rounded-full border border-[#DDD7CC] bg-[#FFFCF8] px-2.5 py-1.5 active:opacity-80"
                           >
                             <Ionicons name="copy-outline" size={14} color="#0B0B0B" />
