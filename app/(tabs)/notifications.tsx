@@ -13,12 +13,13 @@ import {
   updateSavedChatOutputTitle,
   type SavedChatOutput,
 } from "@/lib/savedChatOutputs";
+import { track } from "@/lib/posthog";
 import { fetchWeeklyRecap, generateWeeklyRecap } from "@/lib/weeklyRecap";
 import { utcWeekAnchorMonday } from "@/lib/weekAnchor";
 import { Ionicons } from "@expo/vector-icons";
 import { useFocusEffect } from "@react-navigation/native";
 import { useRouter } from "expo-router";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -40,6 +41,8 @@ export default function NotificationsTab() {
   const [generating, setGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [nudges, setNudges] = useState<ParsedNudgeBullet[]>([]);
+  // only fire recap_viewed once per session even if user navigates away and back
+  const recapViewedFired = useRef(false);
   const [saved, setSaved] = useState<SavedChatOutput[]>([]);
   const [selectedSaved, setSelectedSaved] = useState<SavedChatOutput | null>(null);
   const [editingSaved, setEditingSaved] = useState<SavedChatOutput | null>(null);
@@ -62,6 +65,7 @@ export default function NotificationsTab() {
   }, []);
 
   const handleDownloadSaved = useCallback((item: SavedChatOutput) => {
+    track("chat_response_shared", { saved_id: item.id });
     void exportChatTextToFile(item.title, item.full_text)
       .then(() => Alert.alert("Download", "Use the share sheet to save this to Files."))
       .catch((err) =>
@@ -111,7 +115,12 @@ export default function NotificationsTab() {
         return;
       }
       const row = await fetchWeeklyRecap(utcWeekAnchorMonday());
-      setNudges(row ? parseWeeklyRecapBullets(row.bullets) : []);
+      const parsed = row ? parseWeeklyRecapBullets(row.bullets) : [];
+      setNudges(parsed);
+      if (row && parsed.length > 0 && !recapViewedFired.current) {
+        recapViewedFired.current = true;
+        track("recap_viewed", { bullet_count: parsed.length });
+      }
       setSaved(await loadSavedChatOutputs());
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not load notifications.");
@@ -133,7 +142,12 @@ export default function NotificationsTab() {
     setError(null);
     try {
       const row = await generateWeeklyRecap();
-      setNudges(row ? parseWeeklyRecapBullets(row.bullets) : []);
+      const parsed = row ? parseWeeklyRecapBullets(row.bullets) : [];
+      setNudges(parsed);
+      if (row && parsed.length > 0 && !recapViewedFired.current) {
+        recapViewedFired.current = true;
+        track("recap_viewed", { bullet_count: parsed.length, generated: 1 });
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not generate notifications.");
     } finally {
@@ -255,12 +269,17 @@ export default function NotificationsTab() {
                               }
                               onPress={() => {
                                 if (action === "library" && nudge.memoryId) {
+                                  track("nudge_tapped", {
+                                    action: "library",
+                                    memory_id: nudge.memoryId,
+                                  });
                                   router.push({
                                     pathname: "/archive",
                                     params: { openMemoryId: nudge.memoryId },
                                   });
                                   return;
                                 }
+                                track("nudge_tapped", { action: "chat" });
                                 router.push({
                                   pathname: "/action",
                                   params: {
