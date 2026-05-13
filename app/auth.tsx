@@ -1,14 +1,16 @@
 import { useAuth } from "@/lib/auth";
 import { supabase } from "@/lib/supabase";
+import { Ionicons } from "@expo/vector-icons";
 import { Redirect, router } from "expo-router";
 import { useState } from "react";
-import { ActivityIndicator, Alert, Platform, Pressable, Text, TextInput, View } from "react-native";
+import { ActivityIndicator, Alert, Pressable, Text, TextInput, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 export default function AuthScreen() {
   const { session, isLoading } = useAuth();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   if (isLoading) {
@@ -22,10 +24,9 @@ export default function AuthScreen() {
   const normalizedEmail = email.trim();
   const isValidEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail);
   const canSubmit = isValidEmail && password.trim().length >= 6 && !isSubmitting;
-  const inputStyle = Platform.select({
-    ios: {minHeight: 28, paddingTop: 0, paddingBottom: 6},
-    default: { minHeight: 28, paddingTop: 0, paddingBottom: 6 },
-  });
+  // NativeWind's text-lg sneaks a lineHeight onto TextInput which clips descenders on iOS (RN issue #41240)
+  // so we set fontSize manually and skip the className for size, keeping symmetric padding for vertical centering
+  const inputStyle = { fontSize: 18, paddingVertical: 6 };
 
   const handleSignIn = async () => {
     if (!canSubmit) return;
@@ -63,13 +64,14 @@ export default function AuthScreen() {
   };
 
   return (
-    <SafeAreaView className="flex-1 bg-white">
+    <SafeAreaView className="flex-1 bg-[#F4F0EA]">
       <View className="flex-1 px-6 pt-10">
-        <Text className="text-4xl font-black text-black">Venn</Text>
-        <Text className="mt-2 text-base text-gray-600">Sign in or create your account.</Text>
+        <Text className="text-5xl font-black text-[#0B0B0B]">Venn</Text>
+        <Text className="mt-3 text-xl font-bold text-[#0B0B0B]">Sign in or create your account.</Text>
 
         <View className="mt-8 gap-4">
-          <View className="rounded-2xl border border-gray-200 px-4 py-3">
+          {/* white fill + thick black border pops against the warm canvas */}
+          <View className="rounded-2xl border-2 border-[#0B0B0B] bg-white px-4 py-4">
             <TextInput
               value={email}
               onChangeText={setEmail}
@@ -77,42 +79,56 @@ export default function AuthScreen() {
               autoCorrect={false}
               keyboardType="email-address"
               placeholder="Email"
-              placeholderTextColor="#9CA3AF"
-              className="text-base text-black"
+              placeholderTextColor="#5F5F5F"
+              className="font-semibold text-[#0B0B0B]"
               style={inputStyle}
             />
           </View>
 
-          <View className="rounded-2xl border border-gray-200 px-4 py-3">
+          <View className="flex-row items-center rounded-2xl border-2 border-[#0B0B0B] bg-white px-4 py-4">
             <TextInput
               value={password}
               onChangeText={setPassword}
-              secureTextEntry
+              secureTextEntry={!showPassword}
               placeholder="Password (min 6 chars)"
-              placeholderTextColor="#9CA3AF"
-              className="text-base text-black"
+              placeholderTextColor="#5F5F5F"
+              className="flex-1 font-semibold text-[#0B0B0B]"
               style={inputStyle}
             />
+            {/* explicit size so the Pressable can't collapse next to a flex-1 sibling */}
+            <Pressable
+              onPress={() => setShowPassword((s) => !s)}
+              hitSlop={12}
+              className="ml-3 h-8 w-8 items-center justify-center active:opacity-60"
+              accessibilityRole="button"
+              accessibilityLabel={showPassword ? "Hide password" : "Show password"}
+            >
+              <Ionicons
+                name={showPassword ? "eye-off" : "eye"}
+                size={26}
+                color="#0B0B0B"
+              />
+            </Pressable>
           </View>
 
           <Pressable
             onPress={() => void handleSignIn()}
             disabled={!canSubmit}
-            className="items-center rounded-2xl bg-blue-500 px-5 py-4 active:opacity-80 disabled:opacity-40"
+            className="items-center rounded-2xl bg-[#0B0B0B] px-5 py-5 active:opacity-80 disabled:opacity-40"
           >
             {isSubmitting ? (
               <ActivityIndicator size="small" color="#FFFFFF" />
             ) : (
-              <Text className="text-base font-black text-white">Sign In</Text>
+              <Text className="text-xl font-black text-white">Sign In</Text>
             )}
           </Pressable>
 
           <Pressable
             onPress={() => void handleSignUp()}
             disabled={!canSubmit}
-            className="items-center rounded-2xl border border-blue-500 px-5 py-4 active:opacity-80 disabled:opacity-40"
+            className="items-center rounded-2xl border-2 border-[#0B0B0B] px-5 py-5 active:opacity-80 disabled:opacity-40"
           >
-            <Text className="text-base font-black text-blue-500">Create Account</Text>
+            <Text className="text-xl font-black text-[#0B0B0B]">Create Account</Text>
           </Pressable>
         </View>
       </View>

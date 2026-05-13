@@ -13,7 +13,8 @@ export default function Index() {
       if (session) {
         router.replace("/(tabs)/archive");
       } else {
-        router.replace("/auth");
+        // any signed-out user gets the intro before the auth screen
+        router.replace("/intro");
       }
     }, 900);
 
