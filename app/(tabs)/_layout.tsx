@@ -17,7 +17,8 @@ export default function TabsLayout() {
   }
 
   if (!session) {
-    return <Redirect href="/auth" />;
+    // signed-out users always see the intro before the auth screen
+    return <Redirect href="/intro" />;
   }
 
   return (
