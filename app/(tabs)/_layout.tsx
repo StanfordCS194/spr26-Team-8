@@ -45,21 +45,21 @@ export default function TabsLayout() {
             },
           }}
         >
+                    <Tabs.Screen
+            name="archive"
+            options={{
+              title: "Library",
+              tabBarIcon: ({ color, focused }) => (
+                <Ionicons name={focused ? "albums" : "albums-outline"} size={22} color={color} />
+              ),
+            }}
+          />
           <Tabs.Screen
             name="action"
             options={{
               title: "Action",
               tabBarIcon: ({ color, focused }) => (
                 <Ionicons name={focused ? "flash" : "flash-outline"} size={22} color={color} />
-              ),
-            }}
-          />
-          <Tabs.Screen
-            name="archive"
-            options={{
-              title: "Library",
-              tabBarIcon: ({ color, focused }) => (
-                <Ionicons name={focused ? "albums" : "albums-outline"} size={22} color={color} />
               ),
             }}
           />

@@ -16,8 +16,6 @@ import { extractTextTemporalSignals } from "@/lib/extractTemporalFromUserText";
 import { checkImageContext, moderateUpload } from "@/lib/moderation";
 import { fetchRemoteArchiveMeta, notifyArchiveIndexUpdated } from "@/lib/archiveBackendSync";
 import { fetchEmbeddingThemeOverrides } from "@/lib/embeddingThemes";
-import { MiniChatWindow } from "@/components/MiniChatWindow";
-import { getWeeklyNudgeEnabled, setWeeklyNudgeEnabled } from "@/lib/nudgePrefs";
 import { extractSearchableTextFromImage } from "@/lib/vision";
 import { track } from "@/lib/posthog";
 import { supabase } from "@/lib/supabase";
@@ -48,7 +46,6 @@ import {
   RefreshControl,
   ScrollView,
   StyleSheet,
-  Switch,
   Text,
   TextInput,
   useWindowDimensions,
@@ -148,7 +145,6 @@ export default function ArchiveTab() {
   const [pendingAsset, setPendingAsset] = useState<UploadAsset | null>(null);
   const [captionDraft, setCaptionDraft] = useState("");
   const [intentDraft, setIntentDraft] = useState("");
-  const [weeklyNudgeEnabled, setWeeklyNudgeEnabledState] = useState(true);
   const [isUploading, setIsUploading] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [isSavingCaption, setIsSavingCaption] = useState(false);
@@ -157,17 +153,8 @@ export default function ArchiveTab() {
   const [isSelecting, setIsSelecting] = useState(false);
   const [bulkSelectedIds, setBulkSelectedIds] = useState<string[]>([]);
   const [isRefreshing, setIsRefreshing] = useState(false);
-  const [accountMenuOpen, setAccountMenuOpen] = useState(false);
-  const [accountMenuAnchor, setAccountMenuAnchor] = useState<{
-    x: number;
-    y: number;
-    w: number;
-    h: number;
-  } | null>(null);
-  const { width: windowWidth, height: windowHeight } = useWindowDimensions();
-  const settingsButtonRef = useRef<View | null>(null);
+  const { height: windowHeight } = useWindowDimensions();
   const insets = useSafeAreaInsets();
-  const ACCOUNT_MENU_W = 208;
   const { resolvedSharedPayloads, clearSharedPayloads, error: shareError, refreshSharePayloads } =
     useIncomingShare();
 
@@ -181,11 +168,6 @@ export default function ArchiveTab() {
   useEffect(() => {
     void loadSupplementalSearchText().then(setSupplementalSearchById);
   }, []);
-
-  useEffect(() => {
-    if (!accountMenuOpen) return;
-    void getWeeklyNudgeEnabled().then(setWeeklyNudgeEnabledState);
-  }, [accountMenuOpen]);
 
   useEffect(() => {
     if (shareError) {
@@ -802,32 +784,15 @@ export default function ArchiveTab() {
     }
   }, [selectedItem, viewerCaptionDraft]);
 
-  const closeAccountMenu = useCallback(() => {
-    setAccountMenuOpen(false);
-    setAccountMenuAnchor(null);
-  }, []);
-
-  const openSettingsMenu = useCallback(() => {
-    settingsButtonRef.current?.measureInWindow((x, y, w, h) => {
-      if (w > 0 && h > 0) {
-        setAccountMenuAnchor({ x, y, w, h });
-      } else {
-        setAccountMenuAnchor({
-          x: windowWidth - 16 - 40,
-          y: insets.top + 8,
-          w: 40,
-          h: 40,
-        });
-      }
-      setAccountMenuOpen(true);
-    });
-  }, [insets.top, windowWidth]);
-
   const clearSelection = useCallback(() => {
     setIsSelecting(false);
     setBulkSelectedIds([]);
-    closeAccountMenu();
-  }, [closeAccountMenu]);
+  }, []);
+
+  const enterSelectMode = useCallback(() => {
+    setSelectedItem(null);
+    setIsSelecting(true);
+  }, []);
 
   const toggleBulkSelect = useCallback((id: string) => {
     setBulkSelectedIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
@@ -860,12 +825,6 @@ export default function ArchiveTab() {
       },
     ]);
   }, [bulkSelectedIds, performDeleteItem, clearSelection]);
-
-  const enterSelectMode = useCallback(() => {
-    setSelectedItem(null);
-    closeAccountMenu();
-    setIsSelecting(true);
-  }, [closeAccountMenu]);
 
   const allVisibleSelected =
     gridCells.length > 0 && gridCells.every((c) => bulkSelectedIds.includes(c.item.id));
@@ -925,16 +884,6 @@ export default function ArchiveTab() {
     );
   };
 
-  const accountPopoverPos = useMemo(() => {
-    if (!accountMenuAnchor) return null;
-    const GAP = 6;
-    const pad = 16;
-    const top = accountMenuAnchor.y + accountMenuAnchor.h + GAP;
-    const rawLeft = accountMenuAnchor.x + accountMenuAnchor.w - ACCOUNT_MENU_W;
-    const left = Math.max(pad, Math.min(rawLeft, windowWidth - ACCOUNT_MENU_W - pad));
-    return { left, top };
-  }, [ACCOUNT_MENU_W, accountMenuAnchor, windowWidth]);
-
   const viewerImageMaxH = Math.min(320, Math.round(windowHeight * 0.4));
   const viewerCaptionDirty =
     Boolean(selectedItem) &&
@@ -944,34 +893,13 @@ export default function ArchiveTab() {
     <View className="flex-1 bg-[#F4F0EA]">
       <SafeAreaView className="flex-1 bg-[#F4F0EA]" edges={["left", "right"]}>
         <View className="flex-1">
-          <View className="px-5">
-            <View className="pt-1.5">
-              <View className="flex-row items-center justify-end">
-                {!isSelecting ? (
-                  <View className="flex-row items-center gap-1">
-                    <MiniChatWindow />
-                    <View ref={settingsButtonRef} collapsable={false} className="rounded-full">
-                      <Pressable
-                        accessibilityLabel="Account and settings"
-                        onPress={openSettingsMenu}
-                        hitSlop={8}
-                        className="rounded-full p-1.5 active:bg-black/5"
-                      >
-                        <Ionicons name="settings-outline" size={24} color="#2C2C2C" />
-                      </Pressable>
-                    </View>
-                  </View>
-                ) : null}
-              </View>
-              <View className="mt-1">
-                <Text className="text-4xl font-bold tracking-[-0.5px] text-[#0B0B0B]">Library</Text>
-                {isSelecting ? (
-                  <Text className="pt-0.5 text-sm font-medium text-[#0B7AEE]">
-                    {bulkSelectedIds.length} selected
-                  </Text>
-                ) : null}
-              </View>
-            </View>
+          <View className="px-5 pt-2">
+            <Text className="text-4xl font-bold tracking-[-0.5px] text-[#0B0B0B]">Library</Text>
+            {isSelecting ? (
+              <Text className="pt-0.5 text-sm font-medium text-[#0B7AEE]">
+                {bulkSelectedIds.length} selected
+              </Text>
+            ) : null}
             <Pressable
               disabled={isSelecting}
               className={`mt-3 items-center rounded-3xl px-5 py-3.5 ${
@@ -1221,75 +1149,6 @@ export default function ArchiveTab() {
               </View>
             </View>
           </KeyboardAvoidingView>
-        </Modal>
-
-        <Modal
-          visible={accountMenuOpen}
-          transparent
-          animationType="fade"
-          onRequestClose={closeAccountMenu}
-        >
-          <View className="flex-1">
-            <Pressable
-              className="absolute inset-0 bg-black/20"
-              onPress={closeAccountMenu}
-              accessibilityLabel="Close menu"
-            />
-            {accountMenuAnchor && accountPopoverPos ? (
-              <View className="absolute inset-0" pointerEvents="box-none">
-                <View
-                  className="overflow-hidden rounded-2xl border border-[#E6E1DA] bg-white"
-                  style={[
-                    {
-                      left: accountPopoverPos.left,
-                      position: "absolute",
-                      top: accountPopoverPos.top,
-                      width: ACCOUNT_MENU_W,
-                      zIndex: 2,
-                    },
-                    Platform.select({
-                      android: { elevation: 10 },
-                      ios: {
-                        shadowColor: "#000",
-                        shadowOffset: { width: 0, height: 6 },
-                        shadowOpacity: 0.2,
-                        shadowRadius: 12,
-                      },
-                    }),
-                  ]}
-                >
-                  <Text className="border-b border-[#E6E1DA] px-3 py-1.5 text-xs font-semibold uppercase tracking-wider text-[#6B6B6B]">
-                    Account
-                  </Text>
-                  <View className="flex-row items-center justify-between border-b border-[#E6E1DA] px-3 py-2.5">
-                    <Text className="shrink pr-3 text-sm font-medium text-[#0B0B0B]" numberOfLines={2}>
-                      Weekly nudges
-                    </Text>
-                    <Switch
-                      value={weeklyNudgeEnabled}
-                      onValueChange={(v) => {
-                        setWeeklyNudgeEnabledState(v);
-                        void setWeeklyNudgeEnabled(v);
-                      }}
-                      trackColor={{ false: "#E6E1DA", true: "#0B7AEE" }}
-                      thumbColor="#FFFFFF"
-                      accessibilityLabel="Weekly nudges"
-                    />
-                  </View>
-                  <Pressable
-                    className="px-3 py-2.5 active:bg-[#F4F0EA]"
-                    onPress={() => {
-                      closeAccountMenu();
-                      void supabase.auth.signOut();
-                    }}
-                    accessibilityLabel="Sign out"
-                  >
-                    <Text className="text-sm font-semibold text-red-500">Sign out</Text>
-                  </Pressable>
-                </View>
-              </View>
-            ) : null}
-          </View>
         </Modal>
 
         <Modal
