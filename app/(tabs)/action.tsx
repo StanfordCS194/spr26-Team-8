@@ -561,32 +561,23 @@ export default function ActionTab() {
                     ))}
                   </View>
                 ) : null}
-                <View className="flex-row items-center">
-                  <TextInput
-                    value={input}
-                    onChangeText={setInput}
-                    placeholder="What would you like to do today?"
-                    placeholderTextColor="rgba(95, 95, 95, 0.55)"
-                    className="min-h-[28px] flex-1 text-[#0B0B0B]"
-                    style={{ fontSize: 16, lineHeight: 22, paddingVertical: 0 }}
-                    multiline={false}
-                    scrollEnabled={false}
-                    textAlignVertical="center"
-                    editable={!sending}
-                    onSubmitEditing={() => {
-                      void appendExchange(input);
-                      setInput("");
-                    }}
-                    returnKeyType="send"
-                  />
-                  <Pressable
-                    accessibilityRole="button"
-                    className="ml-1 p-1 active:opacity-70"
-                    hitSlop={8}
-                  >
-                    <Ionicons name="mic-outline" size={22} color="rgba(95, 95, 95, 0.55)" />
-                  </Pressable>
-                </View>
+                <TextInput
+                  value={input}
+                  onChangeText={setInput}
+                  placeholder="What would you like to do today?"
+                  placeholderTextColor="rgba(95, 95, 95, 0.55)"
+                  className="min-h-[28px] w-full text-[#0B0B0B]"
+                  style={{ fontSize: 16, lineHeight: 22, paddingVertical: 0 }}
+                  multiline={false}
+                  scrollEnabled={false}
+                  textAlignVertical="center"
+                  editable={!sending}
+                  onSubmitEditing={() => {
+                    void appendExchange(input);
+                    setInput("");
+                  }}
+                  returnKeyType="send"
+                />
               </View>
 
               <Pressable
