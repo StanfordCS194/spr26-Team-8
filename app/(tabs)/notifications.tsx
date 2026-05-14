@@ -1,5 +1,4 @@
 import { MarkdownishBoldLine } from "@/components/MarkdownishBoldLine";
-import { MiniChatWindow } from "@/components/MiniChatWindow";
 import { exportChatTextToFile } from "@/lib/chatExport";
 import {
   parseWeeklyRecapBullets,
@@ -13,25 +12,29 @@ import {
   updateSavedChatOutputTitle,
   type SavedChatOutput,
 } from "@/lib/savedChatOutputs";
+import { getWeeklyNudgeEnabled, setWeeklyNudgeEnabled } from "@/lib/nudgePrefs";
 import { track } from "@/lib/posthog";
 import { fetchWeeklyRecap, generateWeeklyRecap } from "@/lib/weeklyRecap";
 import { utcWeekAnchorMonday } from "@/lib/weekAnchor";
 import { Ionicons } from "@expo/vector-icons";
 import { useFocusEffect } from "@react-navigation/native";
 import { useRouter } from "expo-router";
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
   Modal,
+  Platform,
   Pressable,
   RefreshControl,
   ScrollView,
+  Switch,
   Text,
   TextInput,
+  useWindowDimensions,
   View,
 } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { supabase } from "@/lib/supabase";
 
 export default function NotificationsTab() {
@@ -47,6 +50,18 @@ export default function NotificationsTab() {
   const [selectedSaved, setSelectedSaved] = useState<SavedChatOutput | null>(null);
   const [editingSaved, setEditingSaved] = useState<SavedChatOutput | null>(null);
   const [editTitleDraft, setEditTitleDraft] = useState("");
+  const settingsButtonRef = useRef<View | null>(null);
+  const [accountMenuOpen, setAccountMenuOpen] = useState(false);
+  const [accountMenuAnchor, setAccountMenuAnchor] = useState<{
+    x: number;
+    y: number;
+    w: number;
+    h: number;
+  } | null>(null);
+  const [weeklyNudgeEnabled, setWeeklyNudgeEnabledState] = useState(true);
+  const { width: windowWidth } = useWindowDimensions();
+  const insets = useSafeAreaInsets();
+  const ACCOUNT_MENU_W = 208;
 
   const handleRemoveSaved = useCallback((item: SavedChatOutput) => {
     Alert.alert("Remove saved output", "Delete this saved output? This cannot be undone.", [
@@ -100,6 +115,32 @@ export default function NotificationsTab() {
       setEditingSaved(null);
     });
   }, [editingSaved, editTitleDraft]);
+
+  useEffect(() => {
+    if (!accountMenuOpen) return;
+    void getWeeklyNudgeEnabled().then(setWeeklyNudgeEnabledState);
+  }, [accountMenuOpen]);
+
+  const closeAccountMenu = useCallback(() => {
+    setAccountMenuOpen(false);
+    setAccountMenuAnchor(null);
+  }, []);
+
+  const openSettingsMenu = useCallback(() => {
+    settingsButtonRef.current?.measureInWindow((x, y, w, h) => {
+      if (w > 0 && h > 0) {
+        setAccountMenuAnchor({ x, y, w, h });
+      } else {
+        setAccountMenuAnchor({
+          x: windowWidth - 16 - 40,
+          y: insets.top + 8,
+          w: 40,
+          h: 40,
+        });
+      }
+      setAccountMenuOpen(true);
+    });
+  }, [insets.top, windowWidth]);
 
   const refresh = useCallback(async (opts?: { mode?: "initial" | "pull" }) => {
     const mode = opts?.mode ?? "initial";
@@ -166,13 +207,34 @@ export default function NotificationsTab() {
     [nudges.length, saved.length]
   );
 
+  const accountPopoverPos = useMemo(() => {
+    if (!accountMenuAnchor) return null;
+    const GAP = 6;
+    const pad = 16;
+    const top = accountMenuAnchor.y + accountMenuAnchor.h + GAP;
+    const rawLeft = accountMenuAnchor.x + accountMenuAnchor.w - ACCOUNT_MENU_W;
+    const left = Math.max(pad, Math.min(rawLeft, windowWidth - ACCOUNT_MENU_W - pad));
+    return { left, top };
+  }, [ACCOUNT_MENU_W, accountMenuAnchor, windowWidth]);
+
   return (
     <View className="flex-1 bg-[#F4F0EA]">
       <SafeAreaView className="flex-1 bg-[#F4F0EA]" edges={["left", "right", "bottom"]}>
-        <View className="flex-row items-center justify-end px-5 pt-2">
-          <MiniChatWindow />
+        <View className="flex-row items-center justify-between px-5 pt-2">
+          <Text className="min-w-0 flex-1 pr-2 text-4xl font-bold tracking-[-0.5px] text-[#0B0B0B]">
+            Inbox
+          </Text>
+          <View ref={settingsButtonRef} collapsable={false} className="shrink-0 rounded-full">
+            <Pressable
+              accessibilityLabel="Account and settings"
+              onPress={openSettingsMenu}
+              hitSlop={8}
+              className="rounded-full p-1.5 active:bg-black/5"
+            >
+              <Ionicons name="settings-outline" size={24} color="#2C2C2C" />
+            </Pressable>
+          </View>
         </View>
-        <Text className="px-5 pt-1 text-4xl font-bold tracking-[-0.5px] text-[#0B0B0B]">Inbox</Text>
         <Text className="px-5 pb-2 pt-1 text-xs font-medium uppercase tracking-[0.2em] text-[#6B6B6B]">
           {subtitle}
         </Text>
@@ -515,6 +577,75 @@ export default function NotificationsTab() {
                 </View>
               </View>
             </View>
+          </View>
+        </Modal>
+
+        <Modal
+          visible={accountMenuOpen}
+          transparent
+          animationType="fade"
+          onRequestClose={closeAccountMenu}
+        >
+          <View className="flex-1">
+            <Pressable
+              className="absolute inset-0 bg-black/20"
+              onPress={closeAccountMenu}
+              accessibilityLabel="Close menu"
+            />
+            {accountMenuAnchor && accountPopoverPos ? (
+              <View className="absolute inset-0" pointerEvents="box-none">
+                <View
+                  className="overflow-hidden rounded-2xl border border-[#E6E1DA] bg-white"
+                  style={[
+                    {
+                      left: accountPopoverPos.left,
+                      position: "absolute",
+                      top: accountPopoverPos.top,
+                      width: ACCOUNT_MENU_W,
+                      zIndex: 2,
+                    },
+                    Platform.select({
+                      android: { elevation: 10 },
+                      ios: {
+                        shadowColor: "#000",
+                        shadowOffset: { width: 0, height: 6 },
+                        shadowOpacity: 0.2,
+                        shadowRadius: 12,
+                      },
+                    }),
+                  ]}
+                >
+                  <Text className="border-b border-[#E6E1DA] px-3 py-1.5 text-xs font-semibold uppercase tracking-wider text-[#6B6B6B]">
+                    Account
+                  </Text>
+                  <View className="flex-row items-center justify-between border-b border-[#E6E1DA] px-3 py-2.5">
+                    <Text className="shrink pr-3 text-sm font-medium text-[#0B0B0B]" numberOfLines={2}>
+                      Weekly nudges
+                    </Text>
+                    <Switch
+                      value={weeklyNudgeEnabled}
+                      onValueChange={(v) => {
+                        setWeeklyNudgeEnabledState(v);
+                        void setWeeklyNudgeEnabled(v);
+                      }}
+                      trackColor={{ false: "#E6E1DA", true: "#0B7AEE" }}
+                      thumbColor="#FFFFFF"
+                      accessibilityLabel="Weekly nudges"
+                    />
+                  </View>
+                  <Pressable
+                    className="px-3 py-2.5 active:bg-[#F4F0EA]"
+                    onPress={() => {
+                      closeAccountMenu();
+                      void supabase.auth.signOut();
+                    }}
+                    accessibilityLabel="Sign out"
+                  >
+                    <Text className="text-sm font-semibold text-red-500">Sign out</Text>
+                  </Pressable>
+                </View>
+              </View>
+            ) : null}
           </View>
         </Modal>
       </SafeAreaView>

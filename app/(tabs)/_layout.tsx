@@ -45,6 +45,15 @@ export default function TabsLayout() {
             },
           }}
         >
+                    <Tabs.Screen
+            name="archive"
+            options={{
+              title: "Library",
+              tabBarIcon: ({ color, focused }) => (
+                <Ionicons name={focused ? "albums" : "albums-outline"} size={22} color={color} />
+              ),
+            }}
+          />
           <Tabs.Screen
             name="action"
             options={{
@@ -55,20 +64,11 @@ export default function TabsLayout() {
             }}
           />
           <Tabs.Screen
-            name="archive"
-            options={{
-              title: "Library",
-              tabBarIcon: ({ color, focused }) => (
-                <Ionicons name={focused ? "albums" : "albums-outline"} size={22} color={color} />
-              ),
-            }}
-          />
-          <Tabs.Screen
             name="notifications"
             options={{
               title: "Inbox",
               tabBarIcon: ({ color, focused }) => (
-                <Ionicons name={focused ? "sparkles" : "sparkles-outline"} size={22} color={color} />
+                <Ionicons name={focused ? "mail" : "mail-outline"} size={22} color={color} />
               ),
             }}
           />
