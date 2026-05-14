@@ -68,7 +68,7 @@ export default function TabsLayout() {
             options={{
               title: "Inbox",
               tabBarIcon: ({ color, focused }) => (
-                <Ionicons name={focused ? "sparkles" : "sparkles-outline"} size={22} color={color} />
+                <Ionicons name={focused ? "mail" : "mail-outline"} size={22} color={color} />
               ),
             }}
           />
