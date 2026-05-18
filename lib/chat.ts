@@ -4,6 +4,7 @@
  */
 
 import { pickRelatedMemoryIds } from "@/lib/chatRelatedMemories";
+import { fetchUserProfileContext } from "@/lib/userProfile";
 import { supabase } from "@/lib/supabase";
 import { logChatMessage } from "@/lib/chatLog";
 
@@ -212,6 +213,11 @@ export async function sendChatMessage(
       ? snippets.map((s, i) => `${i + 1}. ${s}`).join("\n")
       : "No memory snippets yet — nothing with caption, OCR, or upload timestamps. Add something from Library.";
 
+  const profileContext = await fetchUserProfileContext(userId);
+  const fullContext = profileContext
+    ? `User profile (from onboarding):\n${profileContext}\n\nMemory snippets:\n${memoryContext}`
+    : `Memory snippets:\n${memoryContext}`;
+
   void logChatMessage(userId, "user", userText);
 
   const style = options?.style ?? "default";
@@ -254,7 +260,7 @@ export async function sendChatMessage(
       temperature: style === "inbox_action_plan" ? 0.58 : 0.5,
       messages: [
         { role: "system", content: systemPrompt },
-        buildUserMessage(memoryContext, userText, options?.imageBase64s ?? []),
+        buildUserMessage(fullContext, userText, options?.imageBase64s ?? []),
       ],
     }),
   };

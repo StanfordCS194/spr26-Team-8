@@ -1,14 +1,35 @@
 import { useAuth } from "@/lib/auth";
+import { isOnboardingComplete } from "@/lib/userProfile";
 import { venn } from "@/lib/vennTheme";
 import { Ionicons } from "@expo/vector-icons";
 import { Redirect, Tabs } from "expo-router";
+import { useEffect, useState } from "react";
 import { ActivityIndicator, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 export default function TabsLayout() {
   const { session, isLoading } = useAuth();
+  const [onboardingChecked, setOnboardingChecked] = useState(false);
+  const [needsOnboarding, setNeedsOnboarding] = useState(false);
 
-  if (isLoading) {
+  useEffect(() => {
+    if (!session?.user?.id) {
+      setOnboardingChecked(true);
+      setNeedsOnboarding(false);
+      return;
+    }
+    let cancelled = false;
+    void isOnboardingComplete(session.user.id).then((complete) => {
+      if (cancelled) return;
+      setNeedsOnboarding(!complete);
+      setOnboardingChecked(true);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [session?.user?.id]);
+
+  if (isLoading || (session && !onboardingChecked)) {
     return (
       <View className="flex-1 items-center justify-center bg-[#F4F0EA]">
         <ActivityIndicator size="small" color="#0B0B0B" />
@@ -19,6 +40,10 @@ export default function TabsLayout() {
   if (!session) {
     // signed-out users always see the intro before the auth screen
     return <Redirect href="/intro" />;
+  }
+
+  if (needsOnboarding) {
+    return <Redirect href="/onboarding" />;
   }
 
   return (
