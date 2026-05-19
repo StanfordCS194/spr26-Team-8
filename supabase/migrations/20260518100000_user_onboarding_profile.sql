@@ -36,6 +36,10 @@ CREATE POLICY "user_profiles_update_own"
   USING (auth.uid() = user_id)
   WITH CHECK (auth.uid() = user_id);
 
+CREATE POLICY "user_profiles_delete_own"
+  ON user_profiles FOR DELETE
+  USING (auth.uid() = user_id);
+
 CREATE POLICY "user_profile_interests_select_own"
   ON user_profile_interests FOR SELECT
   USING (auth.uid() = user_id);

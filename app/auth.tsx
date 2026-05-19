@@ -1,4 +1,10 @@
 import { useAuth } from "@/lib/auth";
+import {
+  isDevOnboardingEmail,
+  isDevOnboardingLoginEnabled,
+  resetOnboardingProfile,
+  signInAsFreshOnboardingUser,
+} from "@/lib/devOnboarding";
 import { supabase } from "@/lib/supabase";
 import { Ionicons } from "@expo/vector-icons";
 import { Redirect, router } from "expo-router";
@@ -42,7 +48,36 @@ export default function AuthScreen() {
       return;
     }
 
+    if (__DEV__ && isDevOnboardingEmail(normalizedEmail)) {
+      const { data: auth } = await supabase.auth.getUser();
+      const uid = auth.user?.id;
+      if (uid) {
+        try {
+          await resetOnboardingProfile(uid);
+        } catch (e) {
+          Alert.alert(
+            "Dev onboarding reset failed",
+            e instanceof Error ? e.message : "Could not clear onboarding state."
+          );
+          return;
+        }
+      }
+      router.replace("/onboarding");
+      return;
+    }
+
     router.replace("/(tabs)/archive");
+  };
+
+  const handleDevFreshOnboarding = async () => {
+    setIsSubmitting(true);
+    const { error } = await signInAsFreshOnboardingUser();
+    setIsSubmitting(false);
+    if (error) {
+      Alert.alert("Dev onboarding login", error);
+      return;
+    }
+    router.replace("/onboarding");
   };
 
   const handleSignUp = async () => {
@@ -130,6 +165,21 @@ export default function AuthScreen() {
           >
             <Text className="text-xl font-black text-[#0B0B0B]">Create Account</Text>
           </Pressable>
+
+          {__DEV__ && isDevOnboardingLoginEnabled() ? (
+            <Pressable
+              onPress={() => void handleDevFreshOnboarding()}
+              disabled={isSubmitting}
+              className="mt-2 items-center rounded-2xl border border-dashed border-[#8A8278] bg-[#FFFCF8] px-5 py-4 active:opacity-80 disabled:opacity-40"
+            >
+              <Text className="text-center text-base font-bold text-[#5C4A32]">
+                Dev: New account experience
+              </Text>
+              <Text className="mt-1 text-center text-xs font-medium text-[#8A8278]">
+                Signs in with your dev test user and clears onboarding
+              </Text>
+            </Pressable>
+          ) : null}
         </View>
       </View>
     </SafeAreaView>

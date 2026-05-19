@@ -61,6 +61,12 @@ export default function OnboardingScreen() {
 
   const stepIndex = STEPS.indexOf(step);
 
+  const toggleImage = useCallback((id: string) => {
+    setSelectedIds((prev) =>
+      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
+    );
+  }, []);
+
   if (checkingExisting) {
     return (
       <View className="flex-1 items-center justify-center bg-[#F4F0EA]">
@@ -68,12 +74,6 @@ export default function OnboardingScreen() {
       </View>
     );
   }
-
-  const toggleImage = useCallback((id: string) => {
-    setSelectedIds((prev) =>
-      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
-    );
-  }, []);
 
   const goNext = () => {
     if (step === "location") {
