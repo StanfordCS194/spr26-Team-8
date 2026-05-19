@@ -427,47 +427,43 @@ export default function ActionTab() {
                   >
                     <View
                       collapsable={Platform.OS === "android" ? false : undefined}
-                      className="w-full shrink-0 overflow-hidden rounded-3xl border border-[#E6E1DA] bg-white px-5 pt-4 pb-6"
+                      className="w-full shrink-0 overflow-hidden rounded-3xl border border-[#E6E1DA] bg-white px-5 pt-4 pb-3"
                     >
-                      <View className="w-full shrink-0 pb-6">
+                      <View className="w-full shrink-0">
                         <AssistantMessageBody content={msg.text} />
                         <RelatedLibraryPhotos items={msg.relatedLibraryImages ?? []} />
                       </View>
-                      <View className="mt-1 w-full shrink-0 border-t border-[#EDE8DF] pt-5">
-                        <View className="shrink-0 flex-row flex-wrap justify-end gap-4">
-                          <Pressable
-                            accessibilityRole="button"
-                            accessibilityLabel="Copy chat output"
-                            onPress={() => {
-                              track("chat_response_copied", {
-                                chat_session_id: chatSessionId,
-                                message_id: msg.id,
-                              });
-                              void copyChatOutput(msg.text);
-                            }}
-                            className="flex-row items-center gap-1 rounded-full border border-[#DDD7CC] bg-[#FFFCF8] px-2.5 py-1.5 active:opacity-80"
-                          >
-                            <Ionicons name="copy-outline" size={14} color="#0B0B0B" />
-                            <Text className="text-xs font-semibold text-[#0B0B0B]">Copy</Text>
-                          </Pressable>
-                          <Pressable
-                            accessibilityRole="button"
-                            accessibilityLabel={
-                              savedMessageIds[msg.id] ? "Remove saved chat output" : "Save chat output"
-                            }
-                            onPress={() => handleSaveMessage(msg.id, msg.text)}
-                            className="flex-row items-center gap-1 rounded-full border border-[#DDD7CC] bg-[#FFFCF8] px-2.5 py-1.5 active:opacity-80"
-                          >
-                            <Ionicons
-                              name={savedMessageIds[msg.id] ? "bookmark" : "bookmark-outline"}
-                              size={14}
-                              color="#0B0B0B"
-                            />
-                            <Text className="text-xs font-semibold text-[#0B0B0B]">
-                              {savedMessageIds[msg.id] ? "Saved" : "Save"}
-                            </Text>
-                          </Pressable>
-                        </View>
+                      <View className="mt-2 flex-row justify-end gap-1">
+                        <Pressable
+                          accessibilityRole="button"
+                          accessibilityLabel="Copy chat output"
+                          hitSlop={8}
+                          onPress={() => {
+                            track("chat_response_copied", {
+                              chat_session_id: chatSessionId,
+                              message_id: msg.id,
+                            });
+                            void copyChatOutput(msg.text);
+                          }}
+                          className="h-8 w-8 items-center justify-center rounded-full active:bg-[#F0EBE3]"
+                        >
+                          <Ionicons name="copy-outline" size={16} color="#5F5F5F" />
+                        </Pressable>
+                        <Pressable
+                          accessibilityRole="button"
+                          accessibilityLabel={
+                            savedMessageIds[msg.id] ? "Remove saved chat output" : "Save chat output"
+                          }
+                          hitSlop={8}
+                          onPress={() => handleSaveMessage(msg.id, msg.text)}
+                          className="h-8 w-8 items-center justify-center rounded-full active:bg-[#F0EBE3]"
+                        >
+                          <Ionicons
+                            name={savedMessageIds[msg.id] ? "bookmark" : "bookmark-outline"}
+                            size={16}
+                            color={savedMessageIds[msg.id] ? "#0B7AEE" : "#5F5F5F"}
+                          />
+                        </Pressable>
                       </View>
                     </View>
                   </View>

@@ -1,5 +1,6 @@
 import { supabase } from "@/lib/supabase";
 import { isMissingTableError, isUndefinedColumnError } from "@/lib/supabaseSchema";
+import { fetchUserProfileContext } from "@/lib/userProfile";
 
 import { utcWeekAnchorMonday } from "@/lib/weekAnchor";
 
@@ -154,7 +155,12 @@ export async function generateWeeklyRecap(): Promise<{ bullets: string; week_anc
     "If context is thin, still output 3 lines: short honest guesses from what exists, and keep one line gently nudging them to add “I want to…” on Library uploads next time.\n" +
     "That onboarding line (only that one) MUST use the tag right after '- ': '- [tip] …' so the app does not treat it as a chat task. Do not use [tip] on the other two lines.";
 
+  const profileBlock =
+    (await fetchUserProfileContext(userId)).trim() ||
+    "(no onboarding profile yet)";
+
   const userPayload =
+    `--- User profile (location + signup interests) ---\n${profileBlock}\n\n` +
     `--- Recent uploads / intents (captions & “want to”) ---\n${uploadsBlock}\n\n` +
     `--- Recent chat (oldest→newest) ---\n${chatBlock.slice(0, 12000)}`;
 
