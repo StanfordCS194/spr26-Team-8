@@ -3,7 +3,7 @@ import { sendChatMessage } from "@/lib/chat";
 import { copyChatOutput } from "@/lib/copyChatOutput";
 import {
   type RelatedMemoryThumbnail,
-  fetchRelatedMemoryThumbnails,
+  relatedThumbnailsForMessageText,
 } from "@/lib/fetchMemoryThumbnailUrls";
 import { removeSavedChatOutput, saveChatOutput, suggestSavedChatOutputTitle } from "@/lib/savedChatOutputs";
 import { Ionicons } from "@expo/vector-icons";
@@ -115,17 +115,17 @@ export function MiniChatWindow() {
     ]);
     try {
       const reply = await sendChatMessage(trimmed);
-      const relatedLibraryImages =
-        reply.relatedMemoryIds.length > 0
-          ? await fetchRelatedMemoryThumbnails(reply.relatedMemoryIds)
-          : [];
+      const relatedLibraryImages = await relatedThumbnailsForMessageText(
+        reply.text,
+        reply.memoryCandidates
+      );
       setMessages((m) => [
         ...m,
         {
           id: `assistant-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
           role: "assistant",
           text: reply.text,
-          ...(relatedLibraryImages.length ? { relatedLibraryImages } : {}),
+          ...(relatedLibraryImages.length > 0 ? { relatedLibraryImages } : {}),
         },
       ]);
     } catch (err) {

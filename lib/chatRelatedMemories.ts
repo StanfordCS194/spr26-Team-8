@@ -77,7 +77,29 @@ const STOPWORDS = new Set([
   "getting",
   "little",
   "lots",
+  "morning",
+  "afternoon",
+  "evening",
+  "tomorrow",
+  "today",
+  "simple",
+  "popular",
+  "great",
+  "easy",
+  "enjoy",
+  "fresh",
+  "start",
+  "head",
+  "city",
+  "urban",
 ]);
+
+/** Stricter matching so unrelated Library photos are not shown. */
+export const CHAT_RELATED_MEMORY_OPTS = {
+  maxPick: 4,
+  minScore: 3,
+  minMatchCount: 2,
+} as const;
 
 function tokenize(text: string): string[] {
   return text
@@ -86,14 +108,18 @@ function tokenize(text: string): string[] {
     .filter((w) => w.length >= 3 && !STOPWORDS.has(w));
 }
 
-/** Score overlap between assistant reply and memory captions/OCR (weighted toward longer tokens). */
-function overlapScore(replyTokens: Set<string>, haystack: string): number {
+function overlapMetrics(
+  replyTokens: Set<string>,
+  haystack: string
+): { score: number; matchCount: number } {
   let score = 0;
+  let matchCount = 0;
   for (const t of tokenize(haystack)) {
     if (!replyTokens.has(t)) continue;
+    matchCount += 1;
     score += t.length >= 6 ? 3 : t.length >= 5 ? 2 : 1;
   }
-  return score;
+  return { score, matchCount };
 }
 
 /**
@@ -102,20 +128,21 @@ function overlapScore(replyTokens: Set<string>, haystack: string): number {
 export function pickRelatedMemoryIds(
   assistantReply: string,
   candidates: MemoryMatchCandidate[],
-  opts?: { maxPick?: number; minScore?: number }
+  opts?: { maxPick?: number; minScore?: number; minMatchCount?: number }
 ): string[] {
-  const maxPick = opts?.maxPick ?? 4;
-  const minScore = opts?.minScore ?? 2;
+  const maxPick = opts?.maxPick ?? CHAT_RELATED_MEMORY_OPTS.maxPick;
+  const minScore = opts?.minScore ?? CHAT_RELATED_MEMORY_OPTS.minScore;
+  const minMatchCount = opts?.minMatchCount ?? CHAT_RELATED_MEMORY_OPTS.minMatchCount;
 
   const replyTokens = new Set(tokenize(assistantReply));
   if (replyTokens.size === 0 || candidates.length === 0) return [];
 
   const scored = candidates
-    .map((c) => ({
-      memory_id: c.memory_id,
-      score: overlapScore(replyTokens, c.haystack),
-    }))
-    .filter((s) => s.score >= minScore)
+    .map((c) => {
+      const { score, matchCount } = overlapMetrics(replyTokens, c.haystack);
+      return { memory_id: c.memory_id, score, matchCount };
+    })
+    .filter((s) => s.score >= minScore && s.matchCount >= minMatchCount)
     .sort((a, b) => b.score - a.score);
 
   const seen = new Set<string>();

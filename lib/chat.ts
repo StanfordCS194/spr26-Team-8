@@ -3,7 +3,7 @@
  * the user's recent OCR memory descriptions as grounding context.
  */
 
-import { pickRelatedMemoryIds } from "@/lib/chatRelatedMemories";
+import type { MemoryMatchCandidate } from "@/lib/chatRelatedMemories";
 import { fetchUserProfileContext } from "@/lib/userProfile";
 import { supabase } from "@/lib/supabase";
 import { logChatMessage } from "@/lib/chatLog";
@@ -138,8 +138,8 @@ export type ChatResponseStyle = "default" | "inbox_action_plan";
 
 export type ChatMessageReply = {
   text: string;
-  /** Memories whose OCR/caption text overlaps the assistant reply — thumbnails can link to Library. */
-  relatedMemoryIds: string[];
+  /** Library rows used to match thumbnails per message bubble in the UI. */
+  memoryCandidates: MemoryMatchCandidate[];
 };
 
 export async function sendChatMessage(
@@ -148,7 +148,7 @@ export async function sendChatMessage(
 ): Promise<ChatMessageReply> {
   if (!USE_GENERATIVE_CHAT_API) {
     const t = userText.trim() || "(empty)";
-    return { text: `Echo: ${t}`, relatedMemoryIds: [] };
+    return { text: `Echo: ${t}`, memoryCandidates: [] };
   }
   const apiKey = process.env.EXPO_PUBLIC_OPENAI_API_KEY?.trim();
   if (!apiKey) {
@@ -302,7 +302,5 @@ export async function sendChatMessage(
 
   void logChatMessage(userId, "assistant", content);
 
-  const relatedMemoryIds = pickRelatedMemoryIds(content, memoryCandidates);
-
-  return { text: content, relatedMemoryIds };
+  return { text: content, memoryCandidates };
 }
