@@ -332,10 +332,16 @@ export default function ActionTab() {
         })),
       ];
 
-      const seen = new Set<string>();
+      const seenUri = new Set<string>();
+      const seenName = new Set<string>();
       return next.filter((img) => {
-        if (seen.has(img.uri)) return false;
-        seen.add(img.uri);
+        if (seenUri.has(img.uri)) return false;
+        seenUri.add(img.uri);
+        const nameKey = img.fileName?.trim().toLowerCase();
+        if (nameKey) {
+          if (seenName.has(nameKey)) return false;
+          seenName.add(nameKey);
+        }
         return true;
       });
     });

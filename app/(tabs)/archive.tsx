@@ -18,6 +18,14 @@ import { fetchRemoteArchiveMeta, notifyArchiveIndexUpdated } from "@/lib/archive
 import { fetchEmbeddingThemeOverrides } from "@/lib/embeddingThemes";
 import { extractSearchableTextFromImage } from "@/lib/vision";
 import { track } from "@/lib/posthog";
+import {
+  contentHashOfUpload,
+  isDuplicateLibraryUpload,
+  libraryItemsIncludeNameSuffix,
+  forgetUploadContentHash,
+  rememberUploadContentHash,
+  uploadNameSuffix,
+} from "@/lib/uploadDedup";
 import { supabase } from "@/lib/supabase";
 import { isUndefinedColumnError } from "@/lib/supabaseSchema";
 import {
@@ -460,6 +468,16 @@ export default function ArchiveTab() {
       });
       if (picked.canceled || !picked.assets.length) return;
       const selected = picked.assets[0];
+      const rawName =
+        selected.fileName || selected.uri.split("/").pop() || `upload-${Date.now()}.jpg`;
+      const sanitizedBaseName = rawName
+        .replace(/[^\w.\-]/g, "_")
+        .replace(/\.(heic|heif|png|jpg|jpeg)$/i, "");
+      const wasJpeg = isJpegAsset(selected.mimeType, rawName);
+      const nameSuffix = uploadNameSuffix(rawName, sanitizedBaseName, wasJpeg);
+      if (libraryItemsIncludeNameSuffix(items, nameSuffix)) {
+        return fail("This photo has already been uploaded.");
+      }
       setPendingAsset({
         uri: selected.uri,
         fileName: selected.fileName,
@@ -518,24 +536,24 @@ export default function ArchiveTab() {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return fail("Could not identify the current user.");
 
-      // skip the upload entirely if we've already got this filename for this user
-      if (asset.fileName) {
-        const sanitizedName = wasJpeg
-          ? asset.fileName.replace(/[^\w.\-]/g, "_")
-          : `${sanitizedBaseName}.jpeg`;
-        const { data: existing } = await supabase
-          .from("files")
-          .select("file_id")
-          .eq("user_id", user.id)
-          .ilike("file_name", `%-${sanitizedName}`)
-          .limit(1);
-        if (existing && existing.length > 0) return fail("This photo has already been uploaded.");
-      }
-
       const base64 = await FileSystem.readAsStringAsync(uploadUri, {
         encoding: FileSystem.EncodingType.Base64,
       });
       const arrayBuffer = decode(base64);
+
+      const nameSuffix = uploadNameSuffix(rawName, sanitizedBaseName, wasJpeg);
+      const contentHash = await contentHashOfUpload(arrayBuffer);
+      if (
+        await isDuplicateLibraryUpload({
+          userId: user.id,
+          items,
+          nameSuffix,
+          contentHash,
+          activeMemoryIds: items.map((i) => i.id.replace(/^uploaded-/, "")),
+        })
+      ) {
+        return fail("This photo has already been uploaded.");
+      }
 
       const moderationCaption = [caption.trim(), wantToDoSaved].filter(Boolean).join("\n\n");
       const moderation = await moderateUpload({
@@ -655,6 +673,9 @@ export default function ArchiveTab() {
         .eq("memory_id", memoryRow.memory_id);
       if (updateMemoryError) return fail("File uploaded but memory link failed.");
 
+      void rememberUploadContentHash(user.id, memoryRow.memory_id, contentHash);
+      setIsUploading(false);
+
       const newId = `uploaded-${memoryRow.memory_id}`;
 
       const cleanupAll = async () => {
@@ -694,6 +715,7 @@ export default function ArchiveTab() {
 
   const performDeleteItem = useCallback(async (itemId: string) => {
     const memoryId = itemId.replace(/^uploaded-/, "");
+    const { data: { user: deleteUser } } = await supabase.auth.getUser();
     const { data: memory, error: memoryLookupErr } = await supabase
       .from("memories")
       .select("file_id")
@@ -725,6 +747,10 @@ export default function ArchiveTab() {
 
     const { error: delMemoryErr } = await supabase.from("memories").delete().eq("memory_id", memoryId);
     if (delMemoryErr) throw delMemoryErr;
+
+    if (deleteUser) {
+      await forgetUploadContentHash(deleteUser.id, memoryId);
+    }
 
     const updated = await removeSupplementalSearchText(itemId);
     setSupplementalSearchById(updated);
