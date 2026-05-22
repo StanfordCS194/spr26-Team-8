@@ -62,9 +62,16 @@ export async function fetchUserProfileContext(userId: string): Promise<string> {
   const interestRows =
     (interests as { search_text: string; stock_image_id: string }[] | null) ?? [];
   if (interestRows.length > 0) {
-    lines.push("Interests they chose at signup (from images):");
+    lines.push(
+      "Signup interests (images they selected — use the label in \"Since you like …\" when relevant):"
+    );
     interestRows.forEach((row, i) => {
-      lines.push(`${i + 1}. ${row.search_text.trim()}`);
+      const stock = getOnboardingStockImage(row.stock_image_id);
+      const label = stock?.label?.trim() || row.stock_image_id;
+      const keywords = row.search_text.trim();
+      lines.push(
+        keywords ? `${i + 1}. ${label} (keywords: ${keywords})` : `${i + 1}. ${label}`
+      );
     });
   }
 
