@@ -220,10 +220,16 @@ export default function ActionTab() {
           ? [reply.text]
           : splitConvoBubbles(reply.text);
         const candidates = reply.memoryCandidates;
+        const usedMemoryIdsThisReply = new Set<string>();
         for (let i = 0; i < bubbles.length; i += 1) {
           if (i > 0) await new Promise((r) => setTimeout(r, 450));
           const text = bubbles[i];
-          const relatedLibraryImages = await relatedThumbnailsForMessageText(text, candidates);
+          const relatedLibraryImages = await relatedThumbnailsForMessageText(text, candidates, {
+            excludeMemoryIds: usedMemoryIdsThisReply,
+          });
+          for (const thumb of relatedLibraryImages) {
+            usedMemoryIdsThisReply.add(thumb.memoryId);
+          }
           setMessages((m) => [
             ...m,
             makeMessage(

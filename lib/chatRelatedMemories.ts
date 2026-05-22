@@ -128,11 +128,18 @@ function overlapMetrics(
 export function pickRelatedMemoryIds(
   assistantReply: string,
   candidates: MemoryMatchCandidate[],
-  opts?: { maxPick?: number; minScore?: number; minMatchCount?: number }
+  opts?: {
+    maxPick?: number;
+    minScore?: number;
+    minMatchCount?: number;
+    /** Memory IDs already shown on a prior bubble in this reply — skip repeats. */
+    excludeMemoryIds?: Iterable<string>;
+  }
 ): string[] {
   const maxPick = opts?.maxPick ?? CHAT_RELATED_MEMORY_OPTS.maxPick;
   const minScore = opts?.minScore ?? CHAT_RELATED_MEMORY_OPTS.minScore;
   const minMatchCount = opts?.minMatchCount ?? CHAT_RELATED_MEMORY_OPTS.minMatchCount;
+  const exclude = new Set(opts?.excludeMemoryIds ?? []);
 
   const replyTokens = new Set(tokenize(assistantReply));
   if (replyTokens.size === 0 || candidates.length === 0) return [];
@@ -148,7 +155,7 @@ export function pickRelatedMemoryIds(
   const seen = new Set<string>();
   const out: string[] = [];
   for (const row of scored) {
-    if (seen.has(row.memory_id)) continue;
+    if (seen.has(row.memory_id) || exclude.has(row.memory_id)) continue;
     seen.add(row.memory_id);
     out.push(row.memory_id);
     if (out.length >= maxPick) break;

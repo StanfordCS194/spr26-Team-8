@@ -82,9 +82,13 @@ export async function fetchRelatedMemoryThumbnails(
 /** Thumbnails only when this message text overlaps Library OCR/captions (not the full thread). */
 export async function relatedThumbnailsForMessageText(
   messageText: string,
-  candidates: MemoryMatchCandidate[]
+  candidates: MemoryMatchCandidate[],
+  opts?: { excludeMemoryIds?: Iterable<string> }
 ): Promise<RelatedMemoryThumbnail[]> {
-  const ids = pickRelatedMemoryIds(messageText, candidates, CHAT_RELATED_MEMORY_OPTS);
+  const ids = pickRelatedMemoryIds(messageText, candidates, {
+    ...CHAT_RELATED_MEMORY_OPTS,
+    excludeMemoryIds: opts?.excludeMemoryIds,
+  });
   if (ids.length === 0) return [];
   const thumbs = await fetchRelatedMemoryThumbnails(ids);
   return thumbs;
