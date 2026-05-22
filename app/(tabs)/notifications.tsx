@@ -618,6 +618,18 @@ export default function NotificationsTab() {
                   <Text className="border-b border-[#E6E1DA] px-3 py-1.5 text-xs font-semibold uppercase tracking-wider text-[#6B6B6B]">
                     Account
                   </Text>
+                  <Pressable
+                    className="border-b border-[#E6E1DA] px-3 py-2.5 active:bg-[#F4F0EA]"
+                    onPress={() => {
+                      closeAccountMenu();
+                      router.push({ pathname: "/onboarding", params: { edit: "1" } });
+                    }}
+                    accessibilityLabel="Edit location and interests"
+                  >
+                    <Text className="text-sm font-semibold text-[#0B0B0B]">
+                      Edit interests & location
+                    </Text>
+                  </Pressable>
                   <View className="flex-row items-center justify-between border-b border-[#E6E1DA] px-3 py-2.5">
                     <Text className="shrink pr-3 text-sm font-medium text-[#0B0B0B]" numberOfLines={2}>
                       Weekly nudges

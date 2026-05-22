@@ -15,6 +15,50 @@ export type SaveOnboardingInput = {
   interestsFreeform?: string;
 };
 
+export type LoadedOnboardingProfile = {
+  homeLocation: string;
+  selectedStockImageIds: string[];
+  interestsFreeform: string;
+};
+
+/** Current profile + interest picks for editing onboarding. */
+export async function loadOnboardingProfile(
+  userId: string
+): Promise<LoadedOnboardingProfile | null> {
+  const { data: profile, error: profileErr } = await supabase
+    .from("user_profiles")
+    .select("home_location, interests_freeform")
+    .eq("user_id", userId)
+    .maybeSingle();
+
+  if (profileErr) {
+    if (isMissingTableError(profileErr, "user_profiles")) return null;
+    if (__DEV__) console.warn("[userProfile] load profile:", profileErr.message);
+    return null;
+  }
+
+  const { data: interests, error: intErr } = await supabase
+    .from("user_profile_interests")
+    .select("stock_image_id")
+    .eq("user_id", userId);
+
+  if (intErr && !isMissingTableError(intErr, "user_profile_interests")) {
+    if (__DEV__) console.warn("[userProfile] load interests:", intErr.message);
+  }
+
+  const home = (profile as UserProfileRow | null)?.home_location?.trim() ?? "";
+  const freeform = (profile as UserProfileRow | null)?.interests_freeform?.trim() ?? "";
+  const selectedStockImageIds = (
+    (interests as { stock_image_id: string }[] | null) ?? []
+  )
+    .map((r) => r.stock_image_id)
+    .filter(Boolean);
+
+  if (!home && selectedStockImageIds.length === 0 && !freeform) return null;
+
+  return { homeLocation: home, selectedStockImageIds, interestsFreeform: freeform };
+}
+
 /** True when onboarding_completed_at is set (missing table → treat as complete to avoid blocking). */
 export async function isOnboardingComplete(userId: string): Promise<boolean> {
   const { data, error } = await supabase
