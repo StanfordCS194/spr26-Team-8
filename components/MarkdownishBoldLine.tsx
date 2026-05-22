@@ -27,6 +27,18 @@ function splitBoldParts(line: string): Part[] {
   return tokens.map((t, i) => ({ text: t, bold: i % 2 === 1 }));
 }
 
+/** Plain text for clipboard/share — strips **bold**, links, and other light markdown. */
+export function plainTextFromMarkdownish(text: string): string {
+  return text
+    .split("\n")
+    .map((line) => splitBoldParts(line).map((p) => p.text).join(""))
+    .join("\n")
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
+    .replace(/`([^`]+)`/g, "$1")
+    .replace(/^#{1,6}\s+/gm, "")
+    .trim();
+}
+
 export type StructuredItem = { title: string; body: string };
 export type StructuredReply = { intro: string; items: StructuredItem[] };
 

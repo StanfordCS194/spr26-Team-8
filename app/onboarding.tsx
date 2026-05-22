@@ -4,9 +4,9 @@ import { supabase } from "@/lib/supabase";
 import { track } from "@/lib/posthog";
 import { Ionicons } from "@expo/vector-icons";
 import { Image } from "expo-image";
-import { router } from "expo-router";
+import { router, useLocalSearchParams } from "expo-router";
 import { useCallback, useEffect, useState } from "react";
-import { isOnboardingComplete } from "@/lib/userProfile";
+import { isOnboardingComplete, loadOnboardingProfile } from "@/lib/userProfile";
 import {
   ActivityIndicator,
   Alert,
@@ -25,6 +25,13 @@ const STEPS = ["location", "interests", "optional"] as const;
 type Step = (typeof STEPS)[number];
 
 export default function OnboardingScreen() {
+  const params = useLocalSearchParams<{ edit?: string | string[] }>();
+  const editRaw = params.edit;
+  const isEditMode =
+    editRaw === "1" ||
+    editRaw === "true" ||
+    (Array.isArray(editRaw) && editRaw.some((x) => x === "1" || x === "true"));
+
   const { width } = useWindowDimensions();
   const tileGap = 10;
   const tileW = (width - 48 - tileGap) / 2;
@@ -48,6 +55,19 @@ export default function OnboardingScreen() {
         }
         return;
       }
+      if (isEditMode) {
+        const existing = await loadOnboardingProfile(uid);
+        if (!cancelled) {
+          if (existing) {
+            setHomeLocation(existing.homeLocation);
+            setSelectedIds(existing.selectedStockImageIds);
+            setFreeform(existing.interestsFreeform);
+          }
+          setCheckingExisting(false);
+        }
+        return;
+      }
+
       const done = await isOnboardingComplete(uid);
       if (!cancelled) {
         setCheckingExisting(false);
@@ -57,7 +77,7 @@ export default function OnboardingScreen() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [isEditMode]);
 
   const stepIndex = STEPS.indexOf(step);
 
@@ -113,11 +133,19 @@ export default function OnboardingScreen() {
         selectedStockImageIds: selectedIds,
         interestsFreeform: skippedOptional ? undefined : freeform,
       });
-      track("onboarding_completed", {
-        skipped_optional: skippedOptional,
-        interest_count: selectedIds.length,
-      });
-      router.replace("/(tabs)/archive");
+      if (isEditMode) {
+        track("onboarding_edited", {
+          skipped_optional: skippedOptional,
+          interest_count: selectedIds.length,
+        });
+        router.replace("/(tabs)/notifications");
+      } else {
+        track("onboarding_completed", {
+          skipped_optional: skippedOptional,
+          interest_count: selectedIds.length,
+        });
+        router.replace("/(tabs)/archive");
+      }
     } catch (e) {
       Alert.alert(
         "Could not save",
@@ -141,11 +169,20 @@ export default function OnboardingScreen() {
             <Pressable onPress={goBack} hitSlop={12} className="active:opacity-60">
               <Ionicons name="chevron-back" size={24} color="#0B0B0B" />
             </Pressable>
+          ) : isEditMode ? (
+            <Pressable
+              onPress={() => router.back()}
+              hitSlop={12}
+              accessibilityLabel="Close edit profile"
+              className="active:opacity-60"
+            >
+              <Ionicons name="close" size={24} color="#0B0B0B" />
+            </Pressable>
           ) : (
             <View className="w-6" />
           )}
           <Text className="text-xs font-semibold uppercase tracking-[0.2em] text-[#6B6B6B]">
-            Set up · {stepIndex + 1}/{STEPS.length}
+            {isEditMode ? "Edit profile" : "Set up"} · {stepIndex + 1}/{STEPS.length}
           </Text>
           <View className="w-6" />
         </View>
@@ -267,7 +304,9 @@ export default function OnboardingScreen() {
                 {saving ? (
                   <ActivityIndicator color="#fff" />
                 ) : (
-                  <Text className="text-xl font-black text-white">Finish</Text>
+                  <Text className="text-xl font-black text-white">
+                    {isEditMode ? "Save changes" : "Finish"}
+                  </Text>
                 )}
               </Pressable>
               <Pressable

@@ -3,7 +3,7 @@ import { RelatedLibraryPhotos } from "@/components/RelatedLibraryPhotos";
 import { copyChatOutput } from "@/lib/copyChatOutput";
 import {
   type RelatedMemoryThumbnail,
-  fetchRelatedMemoryThumbnails,
+  relatedThumbnailsForMessageText,
 } from "@/lib/fetchMemoryThumbnailUrls";
 import { CHAT_PROMPTS, sendChatMessage } from "@/lib/chat";
 import { track } from "@/lib/posthog";
@@ -216,26 +216,29 @@ export default function ActionTab() {
           ...(silent ? { style: "inbox_action_plan" as const } : {}),
           imageBase64s,
         });
-        const relatedLibraryImages =
-          reply.relatedMemoryIds.length > 0
-            ? await fetchRelatedMemoryThumbnails(reply.relatedMemoryIds)
-            : [];
         const bubbles = parseStructuredReply(reply.text)
           ? [reply.text]
           : splitConvoBubbles(reply.text);
-        setMessages((m) => [
-          ...m,
-          makeMessage(
-            "assistant",
-            bubbles[0],
-            undefined,
-            relatedLibraryImages.length ? relatedLibraryImages : undefined
-          ),
-        ]);
-        for (let i = 1; i < bubbles.length; i += 1) {
-          await new Promise((r) => setTimeout(r, 450));
+        const candidates = reply.memoryCandidates;
+        const usedMemoryIdsThisReply = new Set<string>();
+        for (let i = 0; i < bubbles.length; i += 1) {
+          if (i > 0) await new Promise((r) => setTimeout(r, 450));
           const text = bubbles[i];
-          setMessages((m) => [...m, makeMessage("assistant", text)]);
+          const relatedLibraryImages = await relatedThumbnailsForMessageText(text, candidates, {
+            excludeMemoryIds: usedMemoryIdsThisReply,
+          });
+          for (const thumb of relatedLibraryImages) {
+            usedMemoryIdsThisReply.add(thumb.memoryId);
+          }
+          setMessages((m) => [
+            ...m,
+            makeMessage(
+              "assistant",
+              text,
+              undefined,
+              relatedLibraryImages.length > 0 ? relatedLibraryImages : undefined
+            ),
+          ]);
           requestAnimationFrame(() => scrollRef.current?.scrollToEnd({ animated: true }));
         }
       } catch (err) {
@@ -329,10 +332,16 @@ export default function ActionTab() {
         })),
       ];
 
-      const seen = new Set<string>();
+      const seenUri = new Set<string>();
+      const seenName = new Set<string>();
       return next.filter((img) => {
-        if (seen.has(img.uri)) return false;
-        seen.add(img.uri);
+        if (seenUri.has(img.uri)) return false;
+        seenUri.add(img.uri);
+        const nameKey = img.fileName?.trim().toLowerCase();
+        if (nameKey) {
+          if (seenName.has(nameKey)) return false;
+          seenName.add(nameKey);
+        }
         return true;
       });
     });

@@ -1,3 +1,4 @@
+import { plainTextFromMarkdownish } from "@/components/MarkdownishBoldLine";
 import { Alert, Platform, Share } from "react-native";
 
 /**
@@ -6,9 +7,11 @@ import { Alert, Platform, Share } from "react-native";
  * native module required — avoids crashes when the dev client wasn't rebuilt).
  */
 export async function copyChatOutput(messageText: string): Promise<void> {
+  const plain = plainTextFromMarkdownish(messageText);
+
   if (Platform.OS === "web") {
     try {
-      await navigator.clipboard.writeText(messageText);
+      await navigator.clipboard.writeText(plain);
       Alert.alert("Copied", "Paste this text anywhere you like.");
     } catch {
       Alert.alert("Copy failed", "Clipboard isn't available in this browser.");
@@ -17,7 +20,7 @@ export async function copyChatOutput(messageText: string): Promise<void> {
   }
 
   try {
-    await Share.share({ message: messageText });
+    await Share.share({ message: plain });
   } catch (err) {
     Alert.alert(
       "Couldn't share",

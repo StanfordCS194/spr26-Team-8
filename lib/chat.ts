@@ -3,7 +3,7 @@
  * the user's recent OCR memory descriptions as grounding context.
  */
 
-import { pickRelatedMemoryIds } from "@/lib/chatRelatedMemories";
+import type { MemoryMatchCandidate } from "@/lib/chatRelatedMemories";
 import { fetchUserProfileContext } from "@/lib/userProfile";
 import { supabase } from "@/lib/supabase";
 import { logChatMessage } from "@/lib/chatLog";
@@ -106,14 +106,13 @@ async function loadMemoriesForChatContext(userId: string): Promise<MemoryChatRow
 }
 
 function buildUserMessage(
-  memoryContext: string,
+  contextBlock: string,
   userText: string,
   imageBase64s: string[]
 ) {
   const trimmed = userText.trim();
   const textBlock =
-    `Memory snippets:\n${memoryContext}\n\n` +
-    `User request: ${trimmed || "(image attached, no text)"}`;
+    `${contextBlock}\n\n` + `User request: ${trimmed || "(image attached, no text)"}`;
   if (imageBase64s.length === 0) {
     return { role: "user" as const, content: textBlock };
   }
@@ -139,8 +138,8 @@ export type ChatResponseStyle = "default" | "inbox_action_plan";
 
 export type ChatMessageReply = {
   text: string;
-  /** Memories whose OCR/caption text overlaps the assistant reply — thumbnails can link to Library. */
-  relatedMemoryIds: string[];
+  /** Library rows used to match thumbnails per message bubble in the UI. */
+  memoryCandidates: MemoryMatchCandidate[];
 };
 
 export async function sendChatMessage(
@@ -149,7 +148,7 @@ export async function sendChatMessage(
 ): Promise<ChatMessageReply> {
   if (!USE_GENERATIVE_CHAT_API) {
     const t = userText.trim() || "(empty)";
-    return { text: `Echo: ${t}`, relatedMemoryIds: [] };
+    return { text: `Echo: ${t}`, memoryCandidates: [] };
   }
   const apiKey = process.env.EXPO_PUBLIC_OPENAI_API_KEY?.trim();
   if (!apiKey) {
@@ -213,7 +212,7 @@ export async function sendChatMessage(
       ? snippets.map((s, i) => `${i + 1}. ${s}`).join("\n")
       : "No memory snippets yet — nothing with caption, OCR, or upload timestamps. Add something from Library.";
 
-  const profileContext = await fetchUserProfileContext(userId);
+  const profileContext = (await fetchUserProfileContext(userId)).trim();
   const fullContext = profileContext
     ? `User profile (from onboarding):\n${profileContext}\n\nMemory snippets:\n${memoryContext}`
     : `Memory snippets:\n${memoryContext}`;
@@ -225,8 +224,13 @@ export async function sendChatMessage(
   const memoryDiscipline =
     "Use the numbered memory snippets as grounding. Snippets prefixed `[Uploaded locally: <time> · <date>]` are in the user's local timezone, newest first — answer time questions using those labels verbatim. If snippets are sparse, give practical defaults briefly.";
 
+  const profileDiscipline = profileContext
+    ? "Onboarding profile: they picked interest images at signup (labels under signup interests). When your reply is clearly shaped by one of those interests—not only by Library memory snippets—include one natural phrase such as \"Since you like live music,\" or \"Since you like brunch & food,\" using the human-readable label (not the keyword list). At most once per reply; omit if the answer does not use signup interests.\n\n"
+    : "";
+
   const systemPromptDefault =
     "You are Venn, a helpful planning assistant. Use the user's profile, memory snippets, requests, and attached files as context.\n" +
+    profileDiscipline +
     memoryDiscipline +
     "\n\nTone: conversational and straightforward — like a thoughtful person in chat, not a brand mascot. " +
     "Avoid jokes, wordplay, exclamation piles, or forced enthusiasm. Use plain language.\n\n" +
@@ -240,6 +244,7 @@ export async function sendChatMessage(
 
   const systemPromptInboxPlan =
     "You're replying to someone who tapped an inbox nudge. Infer practical next moves from their context.\n" +
+    profileDiscipline +
     memoryDiscipline +
     "\n\nTone: calm and conversational — no jokes, hype, or mascot voice. No AI disclaimers. " +
     "If you don't know live facts, suggest a search phrase instead of inventing URLs.\n\n" +
@@ -297,7 +302,5 @@ export async function sendChatMessage(
 
   void logChatMessage(userId, "assistant", content);
 
-  const relatedMemoryIds = pickRelatedMemoryIds(content, memoryCandidates);
-
-  return { text: content, relatedMemoryIds };
+  return { text: content, memoryCandidates };
 }

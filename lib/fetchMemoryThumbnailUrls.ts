@@ -1,3 +1,8 @@
+import {
+  CHAT_RELATED_MEMORY_OPTS,
+  pickRelatedMemoryIds,
+  type MemoryMatchCandidate,
+} from "@/lib/chatRelatedMemories";
 import { supabase } from "@/lib/supabase";
 
 const SIGNED_URL_TTL_SEC = 60 * 60 * 24 * 7;
@@ -72,4 +77,19 @@ export async function fetchRelatedMemoryThumbnails(
     }
   }
   return out;
+}
+
+/** Thumbnails only when this message text overlaps Library OCR/captions (not the full thread). */
+export async function relatedThumbnailsForMessageText(
+  messageText: string,
+  candidates: MemoryMatchCandidate[],
+  opts?: { excludeMemoryIds?: Iterable<string> }
+): Promise<RelatedMemoryThumbnail[]> {
+  const ids = pickRelatedMemoryIds(messageText, candidates, {
+    ...CHAT_RELATED_MEMORY_OPTS,
+    excludeMemoryIds: opts?.excludeMemoryIds,
+  });
+  if (ids.length === 0) return [];
+  const thumbs = await fetchRelatedMemoryThumbnails(ids);
+  return thumbs;
 }
