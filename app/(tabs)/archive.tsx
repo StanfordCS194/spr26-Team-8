@@ -13,7 +13,7 @@ import {
   upsertSupplementalSearchText,
 } from "@/lib/archiveSupplementalSearchText";
 import { extractTextTemporalSignals } from "@/lib/extractTemporalFromUserText";
-import { checkImageContext, moderateUpload } from "@/lib/moderation";
+import { checkImageContext, moderateContent } from "@/lib/moderation";
 import { fetchRemoteArchiveMeta, notifyArchiveIndexUpdated } from "@/lib/archiveBackendSync";
 import { fetchEmbeddingThemeOverrides } from "@/lib/embeddingThemes";
 import { extractSearchableTextFromImage } from "@/lib/vision";
@@ -556,10 +556,9 @@ export default function ArchiveTab() {
       }
 
       const moderationCaption = [caption.trim(), wantToDoSaved].filter(Boolean).join("\n\n");
-      const moderation = await moderateUpload({
-        base64,
-        mimeType: contentType,
-        caption: moderationCaption || undefined,
+      const moderation = await moderateContent({
+        text: moderationCaption || undefined,
+        images: [{ base64, mimeType: contentType }],
       });
       if (!moderation.allowed) {
         return fail(`This upload was blocked by content moderation (${moderation.reason}).`);
