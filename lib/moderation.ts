@@ -1,7 +1,8 @@
 /**
- * Upload guardrails. Called from archive.tsx before any file/row is written
- * to Supabase:
- *   - moderateUpload     — OpenAI omni-moderation (harmful content)
+ * Content guardrails:
+ *   - moderateContent    — OpenAI omni-moderation (harmful text and/or images).
+ *                          Used by archive.tsx before upload and by chat.ts
+ *                          before sending a user turn to the chat model.
  *   - checkImageContext  — Claude Haiku (is the image usable / not garbage)
  *
  * Both fail-open by design: if a key is missing or the API errors, we warn and
@@ -19,27 +20,29 @@ type ModerationApiResponse = {
   }[];
 };
 
-export async function moderateUpload(params: {
-  base64: string;
-  mimeType: string;
-  caption?: string;
+export type ModerationImage = { base64: string; mimeType?: string };
+
+export async function moderateContent(params: {
+  text?: string;
+  images?: ModerationImage[];
 }): Promise<ModerationResult> {
   const apiKey = process.env.EXPO_PUBLIC_OPENAI_API_KEY;
   if (!apiKey) {
-    console.warn("OpenAI moderation key not set; allowing upload");
+    console.warn("OpenAI moderation key not set; allowing content");
     return { allowed: true };
   }
 
-  const input: unknown[] = [
-    {
+  const input: unknown[] = [];
+  const trimmed = params.text?.trim();
+  if (trimmed) input.push({ type: "text", text: trimmed });
+  for (const img of params.images ?? []) {
+    const mime = img.mimeType || "image/jpeg";
+    input.push({
       type: "image_url",
-      image_url: { url: `data:${params.mimeType};base64,${params.base64}` },
-    },
-  ];
-  const trimmedCaption = params.caption?.trim();
-  if (trimmedCaption) {
-    input.push({ type: "text", text: trimmedCaption });
+      image_url: { url: `data:${mime};base64,${img.base64}` },
+    });
   }
+  if (input.length === 0) return { allowed: true };
 
   let json: ModerationApiResponse;
   try {
@@ -52,12 +55,12 @@ export async function moderateUpload(params: {
       body: JSON.stringify({ model: "omni-moderation-latest", input }),
     });
     if (!res.ok) {
-      console.warn(`OpenAI moderation HTTP ${res.status}; allowing upload`);
+      console.warn(`OpenAI moderation HTTP ${res.status}; allowing content`);
       return { allowed: true };
     }
     json = (await res.json()) as ModerationApiResponse;
   } catch (err) {
-    console.warn("OpenAI moderation request failed; allowing upload", err);
+    console.warn("OpenAI moderation request failed; allowing content", err);
     return { allowed: true };
   }
 
