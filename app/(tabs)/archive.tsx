@@ -167,6 +167,9 @@ export default function ArchiveTab() {
   const [isUploading, setIsUploading] = useState(false);
   // true while we're fetching a shared instagram post in the background, before the modal opens
   const [isImportingShare, setIsImportingShare] = useState(false);
+  // AbortController for an in-flight IG import. Backdrop tap / dismissal aborts the fetch
+  // so the user can't get stranded behind the "Importing post…" overlay on a hung request.
+  const importAbortRef = useRef<AbortController | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
   const [isSavingCaption, setIsSavingCaption] = useState(false);
   const [viewerCaptionDraft, setViewerCaptionDraft] = useState("");
@@ -238,10 +241,12 @@ export default function ArchiveTab() {
       return null;
     })();
 
-    if (!sharedUrl) return;
-
+    // Always clear queued payloads even if we don't recognize the URL — otherwise the same
+    // unsupported share would replay on every effect run while the hook still holds it.
     clearSharedPayloads();
     void refreshSharePayloads();
+
+    if (!sharedUrl) return;
 
     if (!isInstagramUrl(sharedUrl)) {
       Alert.alert(
@@ -251,10 +256,12 @@ export default function ArchiveTab() {
       return;
     }
 
+    const controller = new AbortController();
+    importAbortRef.current = controller;
     setIsImportingShare(true);
     void (async () => {
       try {
-        const imported = await fetchInstagramPost(sharedUrl);
+        const imported = await fetchInstagramPost(sharedUrl, { signal: controller.signal });
         setPendingAsset({
           uri: imported.localUri,
           fileName: imported.fileName,
@@ -269,6 +276,8 @@ export default function ArchiveTab() {
         setCaptionDraft(imported.caption);
         setIntentDraft("");
       } catch (err) {
+        // User-initiated cancel — silently dismiss, no alert.
+        if (err instanceof Error && err.name === "AbortError") return;
         Alert.alert(
           "Instagram",
           err instanceof Error
@@ -276,10 +285,19 @@ export default function ArchiveTab() {
             : "Could not import this Instagram post.",
         );
       } finally {
+        if (importAbortRef.current === controller) importAbortRef.current = null;
         setIsImportingShare(false);
       }
     })();
   }, [clearSharedPayloads, refreshSharePayloads, resolvedSharedPayloads]);
+
+  // Abort an in-flight IG import and tear the overlay down. Used by the backdrop tap
+  // and Android's onRequestClose so the modal is dismissable on either platform.
+  const cancelImportingShare = useCallback(() => {
+    importAbortRef.current?.abort();
+    importAbortRef.current = null;
+    setIsImportingShare(false);
+  }, []);
 
   const loadItems = useCallback(async () => {
     try {
@@ -1279,17 +1297,20 @@ export default function ArchiveTab() {
           visible={isImportingShare}
           transparent
           animationType="fade"
-          onRequestClose={() => {
-            // user cancelled, but we can't actually abort the fetch. just hide the overlay
-            setIsImportingShare(false);
-          }}
+          onRequestClose={cancelImportingShare}
         >
-          <View className="flex-1 items-center justify-center bg-black/40">
-            <View className="rounded-2xl bg-white px-6 py-5">
+          <Pressable
+            className="flex-1 items-center justify-center bg-black/40"
+            onPress={cancelImportingShare}
+          >
+            {/* swallow taps on the card so tapping the message itself doesn't cancel */}
+            <Pressable className="rounded-2xl bg-white px-6 py-5" onPress={() => {}}>
               <Text className="text-base font-black text-black">Importing post…</Text>
-              <Text className="mt-1 text-xs text-[#6B6B6B]">Fetching image and caption</Text>
-            </View>
-          </View>
+              <Text className="mt-1 text-xs text-[#6B6B6B]">
+                Fetching image and caption · tap outside to cancel
+              </Text>
+            </Pressable>
+          </Pressable>
         </Modal>
 
         <Modal

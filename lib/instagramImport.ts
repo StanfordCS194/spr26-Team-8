@@ -42,7 +42,7 @@ export function isInstagramUrl(url: string): boolean {
 // rather than the bare URL, so we hunt for the first IG URL substring.
 export function extractInstagramUrl(text: string): string | null {
   const match = text.match(
-    /(https?:\/\/(?:www\.|m\.)?instagram\.com\/(?:p|reel|reels|tv)\/[A-Za-z0-9_-]+[^\s]*)/i,
+    /(https?:\/\/(?:www\.|m\.)?instagram\.com\/(?:p|reel|reels|tv)\/[A-Za-z0-9_-]+[^\s>)\],;]*)/i,
   );
   return match ? match[1] : null;
 }
@@ -130,7 +130,6 @@ function sanitizeCaption(s: string): string {
       // zero-width spaces / joiners / non-joiners / BOM. IG uses these for layout tricks
       .replace(/[​-‍﻿]/g, "")
       // strip control chars but keep \n and \t
-      // eslint-disable-next-line no-control-regex
       .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, "")
       // normalize windows line endings
       .replace(/\r\n?/g, "\n")
@@ -142,9 +141,9 @@ function sanitizeCaption(s: string): string {
       .split("\n")
       .map((line) => line.trimEnd())
       .join("\n")
-      // IG truncates around 150 chars and appends "..." or "…". the user will edit if they want
-      // more, so chop the trailing ellipsis off so the caption doesn't end mid-thought with dots
-      .replace(/[.…]+\s*$/g, "")
+      // IG truncates around 150 chars and appends "..." or "…". Strip those truncation markers
+      // but leave a single trailing "." intact so legitimately-finished sentences keep their period.
+      .replace(/(?:…|\.{2,})\s*$/g, "")
       .trim()
   );
 }
@@ -152,8 +151,10 @@ function sanitizeCaption(s: string): string {
 // og:description looks like: `1,234 likes, 56 comments - username on October 1, 2023: "Caption..."`
 // We pull out the caption from the quoted tail when possible, and the @handle from "username on".
 function parseDescription(desc: string): { caption: string; author: string | null } {
-  // pull the quoted caption tail
-  const quoted = desc.match(/[:\-]\s*"([^"]*)"\s*\.?\s*$/);
+  // Pull the quoted caption tail. The capture group uses `[\s\S]*` (not `[^"]*`) so embedded
+  // double-quotes inside the caption don't break the match — the trailing `"\s*\.?\s*$` anchor
+  // still pins us to the final closing quote at end-of-string.
+  const quoted = desc.match(/[:\-]\s*"([\s\S]*)"\s*\.?\s*$/);
   // username is the word immediately before " on <date>"
   const authorMatch = desc.match(/([A-Za-z0-9._]+)\s+on\s+[A-Z][a-z]+\s+\d{1,2},?\s+\d{4}/);
   const rawCaption = quoted ? quoted[1] : stripLikesPrefix(desc);
@@ -171,58 +172,127 @@ function parseAuthorFromTitle(title: string): string | null {
   return m ? m[1] : null;
 }
 
-export async function fetchInstagramPost(rawUrl: string): Promise<InstagramImportResult> {
+const DEFAULT_FETCH_TIMEOUT_MS = 20_000;
+
+// Helper to throw an AbortError-shaped Error so callers can distinguish user cancellation /
+// timeout from a real network failure. RN doesn't always have DOMException, hence a plain Error.
+function makeAbortError(): Error {
+  const err = new Error("aborted");
+  err.name = "AbortError";
+  return err;
+}
+
+// FileSystem.downloadAsync has no AbortSignal support, so we race it against an abort signal.
+// If the signal fires first, the caller is freed; the underlying download will still finish
+// in the background and write to the cache directory, which RN garbage-collects on its own.
+function abortable<T>(p: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) return Promise.reject(makeAbortError());
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => {
+      signal.removeEventListener("abort", onAbort);
+      reject(makeAbortError());
+    };
+    signal.addEventListener("abort", onAbort);
+    p.then(
+      (v) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(v);
+      },
+      (e) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(e);
+      },
+    );
+  });
+}
+
+export async function fetchInstagramPost(
+  rawUrl: string,
+  options?: { signal?: AbortSignal; timeoutMs?: number },
+): Promise<InstagramImportResult> {
   const sourceUrl = canonicalizeInstagramUrl(rawUrl.trim());
 
-  // pretend to be a desktop browser, otherwise IG often returns a stripped page
-  const res = await fetch(sourceUrl, {
-    method: "GET",
-    headers: {
-      "User-Agent": DESKTOP_USER_AGENT,
-      Accept: "text/html,application/xhtml+xml",
-      "Accept-Language": "en-US,en;q=0.9",
-    },
-  });
-  if (!res.ok) {
-    throw new Error(`Instagram returned HTTP ${res.status}`);
+  // Combine the caller-supplied signal (user-cancel from the UI) with an internal timeout.
+  // We track which one fired so we can surface a clearer error message for timeouts.
+  const controller = new AbortController();
+  const userSignal = options?.signal;
+  const onUserAbort = () => controller.abort();
+  if (userSignal) {
+    if (userSignal.aborted) controller.abort();
+    else userSignal.addEventListener("abort", onUserAbort);
   }
-  const html = await res.text();
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, options?.timeoutMs ?? DEFAULT_FETCH_TIMEOUT_MS);
 
-  const imageUrl = readMetaTag(html, "og:image");
-  if (!imageUrl) {
-    // typically means private / login-walled / removed
-    throw new Error("Could not read the post. It may be private or unavailable.");
+  try {
+    // pretend to be a desktop browser, otherwise IG often returns a stripped page
+    const res = await fetch(sourceUrl, {
+      method: "GET",
+      signal: controller.signal,
+      headers: {
+        "User-Agent": DESKTOP_USER_AGENT,
+        Accept: "text/html,application/xhtml+xml",
+        "Accept-Language": "en-US,en;q=0.9",
+      },
+    });
+    if (!res.ok) {
+      throw new Error(`Instagram returned HTTP ${res.status}`);
+    }
+    const html = await res.text();
+
+    const imageUrl = readMetaTag(html, "og:image");
+    if (!imageUrl) {
+      // typically means private / login-walled / removed
+      throw new Error("Could not read the post. It may be private or unavailable.");
+    }
+    const description = readMetaTag(html, "og:description") ?? "";
+    const title = readMetaTag(html, "og:title") ?? "";
+
+    const { caption, author: authorFromDesc } = parseDescription(description);
+    const author = authorFromDesc ?? parseAuthorFromTitle(title);
+
+    // pick a unique cache filename so concurrent shares don't clobber each other
+    const shortcode = sourceUrl.match(/\/(?:p|reel|reels|tv)\/([A-Za-z0-9_-]+)/)?.[1] ?? `${Date.now()}`;
+    const fileName = `instagram-${shortcode}-${Date.now()}.jpg`;
+    const cacheDir = FileSystem.cacheDirectory;
+    if (!cacheDir) throw new Error("No cache directory available for Instagram download.");
+    const localUri = `${cacheDir}${fileName}`;
+
+    // IG CDN sometimes 403s without a referer, so set one
+    const download = await abortable(
+      FileSystem.downloadAsync(imageUrl, localUri, {
+        headers: {
+          "User-Agent": DESKTOP_USER_AGENT,
+          Referer: "https://www.instagram.com/",
+        },
+      }),
+      controller.signal,
+    );
+    if (download.status !== 200) {
+      throw new Error(`Could not download the post image (HTTP ${download.status}).`);
+    }
+
+    return {
+      localUri: download.uri,
+      fileName,
+      mimeType: "image/jpeg",
+      caption,
+      author,
+      sourceUrl,
+    };
+  } catch (err) {
+    // If we tripped the internal timeout, surface a clearer message even though the underlying
+    // error is an AbortError. User-initiated aborts pass straight through so callers can
+    // silently dismiss without showing an alert.
+    if (controller.signal.aborted && timedOut) {
+      throw new Error("Instagram took too long to respond. Try again in a moment.");
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+    if (userSignal) userSignal.removeEventListener("abort", onUserAbort);
   }
-  const description = readMetaTag(html, "og:description") ?? "";
-  const title = readMetaTag(html, "og:title") ?? "";
-
-  const { caption, author: authorFromDesc } = parseDescription(description);
-  const author = authorFromDesc ?? parseAuthorFromTitle(title);
-
-  // pick a unique cache filename so concurrent shares don't clobber each other
-  const shortcode = sourceUrl.match(/\/(?:p|reel|reels|tv)\/([A-Za-z0-9_-]+)/)?.[1] ?? `${Date.now()}`;
-  const fileName = `instagram-${shortcode}-${Date.now()}.jpg`;
-  const cacheDir = FileSystem.cacheDirectory;
-  if (!cacheDir) throw new Error("No cache directory available for Instagram download.");
-  const localUri = `${cacheDir}${fileName}`;
-
-  // IG CDN sometimes 403s without a referer, so set one
-  const download = await FileSystem.downloadAsync(imageUrl, localUri, {
-    headers: {
-      "User-Agent": DESKTOP_USER_AGENT,
-      Referer: "https://www.instagram.com/",
-    },
-  });
-  if (download.status !== 200) {
-    throw new Error(`Could not download the post image (HTTP ${download.status}).`);
-  }
-
-  return {
-    localUri: download.uri,
-    fileName,
-    mimeType: "image/jpeg",
-    caption,
-    author,
-    sourceUrl,
-  };
 }
