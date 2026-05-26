@@ -16,6 +16,8 @@ import { extractTextTemporalSignals } from "@/lib/extractTemporalFromUserText";
 import {
   extractInstagramUrl,
   fetchInstagramPost,
+  InstagramImportCancelledError,
+  InstagramImportTimeoutError,
   isInstagramUrl,
 } from "@/lib/instagramImport";
 import { checkImageContext, moderateContent } from "@/lib/moderation";
@@ -167,8 +169,7 @@ export default function ArchiveTab() {
   const [isUploading, setIsUploading] = useState(false);
   // true while we're fetching a shared instagram post in the background, before the modal opens
   const [isImportingShare, setIsImportingShare] = useState(false);
-  // AbortController for an in-flight IG import. Backdrop tap / dismissal aborts the fetch
-  // so the user can't get stranded behind the "Importing post…" overlay on a hung request.
+  // AbortController wires the importing-overlay dismiss button to the in-flight IG fetch
   const importAbortRef = useRef<AbortController | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
   const [isSavingCaption, setIsSavingCaption] = useState(false);
@@ -241,8 +242,8 @@ export default function ArchiveTab() {
       return null;
     })();
 
-    // Always clear queued payloads even if we don't recognize the URL — otherwise the same
-    // unsupported share would replay on every effect run while the hook still holds it.
+    if (!sharedUrl) return;
+
     clearSharedPayloads();
     void refreshSharePayloads();
 
@@ -276,24 +277,31 @@ export default function ArchiveTab() {
         setCaptionDraft(imported.caption);
         setIntentDraft("");
       } catch (err) {
-        // User-initiated cancel — silently dismiss, no alert.
-        if (err instanceof Error && err.name === "AbortError") return;
-        Alert.alert(
-          "Instagram",
-          err instanceof Error
-            ? err.message
-            : "Could not import this Instagram post.",
-        );
+        // User-cancel from the overlay backdrop is intentional — no alert. Timeout deserves a
+        // distinct message so the user knows it wasn't their fault. Everything else falls
+        // through to the existing generic error path.
+        if (err instanceof InstagramImportCancelledError) {
+          // intentional silent dismiss
+        } else if (err instanceof InstagramImportTimeoutError) {
+          Alert.alert("Instagram", "Instagram took too long to respond. Try again.");
+        } else {
+          Alert.alert(
+            "Instagram",
+            err instanceof Error
+              ? err.message
+              : "Could not import this Instagram post.",
+          );
+        }
       } finally {
-        if (importAbortRef.current === controller) importAbortRef.current = null;
+        if (importAbortRef.current === controller) {
+          importAbortRef.current = null;
+        }
         setIsImportingShare(false);
       }
     })();
   }, [clearSharedPayloads, refreshSharePayloads, resolvedSharedPayloads]);
 
-  // Abort an in-flight IG import and tear the overlay down. Used by the backdrop tap
-  // and Android's onRequestClose so the modal is dismissable on either platform.
-  const cancelImportingShare = useCallback(() => {
+  const cancelInFlightInstagramImport = useCallback(() => {
     importAbortRef.current?.abort();
     importAbortRef.current = null;
     setIsImportingShare(false);
@@ -1297,18 +1305,17 @@ export default function ArchiveTab() {
           visible={isImportingShare}
           transparent
           animationType="fade"
-          onRequestClose={cancelImportingShare}
+          onRequestClose={cancelInFlightInstagramImport}
         >
+          {/* tappable backdrop — aborts the in-flight IG fetch so iOS users can recover from
+              a slow/hung response without force-quitting. tap on the inner card is a no-op. */}
           <Pressable
             className="flex-1 items-center justify-center bg-black/40"
-            onPress={cancelImportingShare}
+            onPress={cancelInFlightInstagramImport}
           >
-            {/* swallow taps on the card so tapping the message itself doesn't cancel */}
-            <Pressable className="rounded-2xl bg-white px-6 py-5" onPress={() => {}}>
+            <Pressable onPress={() => {}} className="rounded-2xl bg-white px-6 py-5">
               <Text className="text-base font-black text-black">Importing post…</Text>
-              <Text className="mt-1 text-xs text-[#6B6B6B]">
-                Fetching image and caption · tap outside to cancel
-              </Text>
+              <Text className="mt-1 text-xs text-[#6B6B6B]">Tap outside to cancel</Text>
             </Pressable>
           </Pressable>
         </Modal>

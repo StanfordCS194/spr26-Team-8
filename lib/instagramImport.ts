@@ -9,6 +9,9 @@
 //   - Private accounts / login-wall pages return a generic IG og:image and no caption. We treat
 //     that as a soft failure so the user gets a useful error.
 //   - Stories aren't shareable to third-party apps, so we never see them.
+//   - QA note: non-residential IPs (datacenters, some VPNs) get login-walled even for public
+//     posts, so the importer can surface intermittent "private or unavailable" errors during
+//     dev. From real mobile carrier / residential IPs this is rare but nonzero.
 //
 // We pretend to be a desktop browser. Instagram returns a stripped page (no og tags) when the
 // User-Agent looks like a mobile app or a known scraper.
@@ -42,9 +45,12 @@ export function isInstagramUrl(url: string): boolean {
 // rather than the bare URL, so we hunt for the first IG URL substring.
 export function extractInstagramUrl(text: string): string | null {
   const match = text.match(
-    /(https?:\/\/(?:www\.|m\.)?instagram\.com\/(?:p|reel|reels|tv)\/[A-Za-z0-9_-]+[^\s>)\],;]*)/i,
+    /(https?:\/\/(?:www\.|m\.)?instagram\.com\/(?:p|reel|reels|tv)\/[A-Za-z0-9_-]+[^\s]*)/i,
   );
-  return match ? match[1] : null;
+  if (!match) return null;
+  // Trim paired/list punctuation that wraps autolinks in shared text (Messages, Slack,
+  // Markdown). Trailing "." is fine — new URL() collapses it into the path automatically.
+  return match[1].replace(/[>)\]},;]+$/, "");
 }
 
 // Strip share tracking (?igsh=, ?utm_*) and normalize trailing slash so we can dedupe later.
@@ -141,9 +147,9 @@ function sanitizeCaption(s: string): string {
       .split("\n")
       .map((line) => line.trimEnd())
       .join("\n")
-      // IG truncates around 150 chars and appends "..." or "…". Strip those truncation markers
-      // but leave a single trailing "." intact so legitimately-finished sentences keep their period.
-      .replace(/(?:…|\.{2,})\s*$/g, "")
+      // IG truncates around 150 chars and appends "..." or "…". Strip only multi-char ellipses
+      // so legitimately-finished sentences keep their lone trailing period.
+      .replace(/(?:…+|\.{2,})\s*$/g, "")
       .trim()
   );
 }
@@ -151,10 +157,10 @@ function sanitizeCaption(s: string): string {
 // og:description looks like: `1,234 likes, 56 comments - username on October 1, 2023: "Caption..."`
 // We pull out the caption from the quoted tail when possible, and the @handle from "username on".
 function parseDescription(desc: string): { caption: string; author: string | null } {
-  // Pull the quoted caption tail. The capture group uses `[\s\S]*` (not `[^"]*`) so embedded
-  // double-quotes inside the caption don't break the match — the trailing `"\s*\.?\s*$` anchor
-  // still pins us to the final closing quote at end-of-string.
-  const quoted = desc.match(/[:\-]\s*"([\s\S]*)"\s*\.?\s*$/);
+  // Anchor from the parsed date and greedily consume to the final `"` at end-of-string. 
+  const quoted = desc.match(
+    /[A-Z][a-z]+\s+\d{1,2},?\s+\d{4}\s*:\s*"([\s\S]+)"\s*\.?\s*$/,
+  );
   // username is the word immediately before " on <date>"
   const authorMatch = desc.match(/([A-Za-z0-9._]+)\s+on\s+[A-Z][a-z]+\s+\d{1,2},?\s+\d{4}/);
   const rawCaption = quoted ? quoted[1] : stripLikesPrefix(desc);
@@ -172,28 +178,33 @@ function parseAuthorFromTitle(title: string): string | null {
   return m ? m[1] : null;
 }
 
-const DEFAULT_FETCH_TIMEOUT_MS = 20_000;
-
-// Helper to throw an AbortError-shaped Error so callers can distinguish user cancellation /
-// timeout from a real network failure. RN doesn't always have DOMException, hence a plain Error.
-function makeAbortError(): Error {
-  const err = new Error("aborted");
-  err.name = "AbortError";
-  return err;
+/** Sentinel thrown when our timeout fires; callers can branch the user-visible message on it. */
+export class InstagramImportTimeoutError extends Error {
+  constructor(message = "Instagram took too long to respond.") {
+    super(message);
+    this.name = "InstagramImportTimeoutError";
+  }
 }
 
-// FileSystem.downloadAsync has no AbortSignal support, so we race it against an abort signal.
-// If the signal fires first, the caller is freed; the underlying download will still finish
-// in the background and write to the cache directory, which RN garbage-collects on its own.
-function abortable<T>(p: Promise<T>, signal: AbortSignal): Promise<T> {
-  if (signal.aborted) return Promise.reject(makeAbortError());
-  return new Promise<T>((resolve, reject) => {
-    const onAbort = () => {
-      signal.removeEventListener("abort", onAbort);
-      reject(makeAbortError());
-    };
-    signal.addEventListener("abort", onAbort);
-    p.then(
+/** Sentinel thrown when an external AbortSignal (e.g. the user dismissing the overlay) fires. */
+export class InstagramImportCancelledError extends Error {
+  constructor(message = "Instagram import cancelled.") {
+    super(message);
+    this.name = "InstagramImportCancelledError";
+  }
+}
+
+const DEFAULT_TIMEOUT_MS = 20_000;
+
+/** Race a non-cancellable promise against an AbortSignal. The underlying work may continue in
+ *  the background after we throw; callers must tolerate that. Used for FileSystem.downloadAsync
+ *  which the legacy expo-file-system API does not let us cancel directly. */3
+async function raceWithSignal<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) throw signal.reason ?? new Error("aborted");
+  return await new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(signal.reason ?? new Error("aborted"));
+    signal.addEventListener("abort", onAbort, { once: true });
+    work.then(
       (v) => {
         signal.removeEventListener("abort", onAbort);
         resolve(v);
@@ -212,31 +223,30 @@ export async function fetchInstagramPost(
 ): Promise<InstagramImportResult> {
   const sourceUrl = canonicalizeInstagramUrl(rawUrl.trim());
 
-  // Combine the caller-supplied signal (user-cancel from the UI) with an internal timeout.
-  // We track which one fired so we can surface a clearer error message for timeouts.
-  const controller = new AbortController();
-  const userSignal = options?.signal;
-  const onUserAbort = () => controller.abort();
-  if (userSignal) {
-    if (userSignal.aborted) controller.abort();
-    else userSignal.addEventListener("abort", onUserAbort);
+  // Combine the caller's signal (overlay dismiss) with a hard ceiling
+  const ceiling = new AbortController();
+  const timeoutId = setTimeout(
+    () => ceiling.abort(new InstagramImportTimeoutError()),
+    options?.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+  );
+  const external = options?.signal;
+  const propagateExternal = () =>
+    ceiling.abort(external?.reason ?? new InstagramImportCancelledError());
+  if (external) {
+    if (external.aborted) propagateExternal();
+    else external.addEventListener("abort", propagateExternal, { once: true });
   }
-  let timedOut = false;
-  const timer = setTimeout(() => {
-    timedOut = true;
-    controller.abort();
-  }, options?.timeoutMs ?? DEFAULT_FETCH_TIMEOUT_MS);
 
   try {
     // pretend to be a desktop browser, otherwise IG often returns a stripped page
     const res = await fetch(sourceUrl, {
       method: "GET",
-      signal: controller.signal,
       headers: {
         "User-Agent": DESKTOP_USER_AGENT,
         Accept: "text/html,application/xhtml+xml",
         "Accept-Language": "en-US,en;q=0.9",
       },
+      signal: ceiling.signal,
     });
     if (!res.ok) {
       throw new Error(`Instagram returned HTTP ${res.status}`);
@@ -262,14 +272,14 @@ export async function fetchInstagramPost(
     const localUri = `${cacheDir}${fileName}`;
 
     // IG CDN sometimes 403s without a referer, so set one
-    const download = await abortable(
+    const download = await raceWithSignal(
       FileSystem.downloadAsync(imageUrl, localUri, {
         headers: {
           "User-Agent": DESKTOP_USER_AGENT,
           Referer: "https://www.instagram.com/",
         },
       }),
-      controller.signal,
+      ceiling.signal,
     );
     if (download.status !== 200) {
       throw new Error(`Could not download the post image (HTTP ${download.status}).`);
@@ -284,15 +294,18 @@ export async function fetchInstagramPost(
       sourceUrl,
     };
   } catch (err) {
-    // If we tripped the internal timeout, surface a clearer message even though the underlying
-    // error is an AbortError. User-initiated aborts pass straight through so callers can
-    // silently dismiss without showing an alert.
-    if (controller.signal.aborted && timedOut) {
-      throw new Error("Instagram took too long to respond. Try again in a moment.");
+    // Normalize fetch's DOMException("AbortError") so caller can branch on user-cancel vs timeout without sniffing strings.
+    if (err instanceof InstagramImportTimeoutError || err instanceof InstagramImportCancelledError) {
+      throw err;
+    }
+    if ((err as { name?: string } | null)?.name === "AbortError") {
+      const reason = ceiling.signal.reason;
+      if (reason instanceof InstagramImportTimeoutError) throw reason;
+      throw new InstagramImportCancelledError();
     }
     throw err;
   } finally {
-    clearTimeout(timer);
-    if (userSignal) userSignal.removeEventListener("abort", onUserAbort);
+    clearTimeout(timeoutId);
+    if (external) external.removeEventListener("abort", propagateExternal);
   }
 }
