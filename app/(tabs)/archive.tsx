@@ -242,12 +242,16 @@ export default function ArchiveTab() {
       return null;
     })();
 
-    if (!sharedUrl) return;
-
     clearSharedPayloads();
     void refreshSharePayloads();
 
-    if (!sharedUrl) return;
+    if (!sharedUrl) {
+      Alert.alert(
+        "Share",
+        "Venn can only import Instagram posts from a shared link right now.",
+      );
+      return;
+    }
 
     if (!isInstagramUrl(sharedUrl)) {
       Alert.alert(
@@ -295,8 +299,8 @@ export default function ArchiveTab() {
       } finally {
         if (importAbortRef.current === controller) {
           importAbortRef.current = null;
+          setIsImportingShare(false);
         }
-        setIsImportingShare(false);
       }
     })();
   }, [clearSharedPayloads, refreshSharePayloads, resolvedSharedPayloads]);

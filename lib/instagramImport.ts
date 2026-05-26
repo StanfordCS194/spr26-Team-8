@@ -159,7 +159,7 @@ function sanitizeCaption(s: string): string {
 function parseDescription(desc: string): { caption: string; author: string | null } {
   // Anchor from the parsed date and greedily consume to the final `"` at end-of-string. 
   const quoted = desc.match(
-    /[A-Z][a-z]+\s+\d{1,2},?\s+\d{4}\s*:\s*"([\s\S]+)"\s*\.?\s*$/,
+    /[A-Z][a-z]+\s+\d{1,2},?\s+\d{4}\s*:\s*"([\s\S]*)"\s*\.?\s*$/,
   );
   // username is the word immediately before " on <date>"
   const authorMatch = desc.match(/([A-Za-z0-9._]+)\s+on\s+[A-Z][a-z]+\s+\d{1,2},?\s+\d{4}/);
@@ -198,11 +198,15 @@ const DEFAULT_TIMEOUT_MS = 20_000;
 
 /** Race a non-cancellable promise against an AbortSignal. The underlying work may continue in
  *  the background after we throw; callers must tolerate that. Used for FileSystem.downloadAsync
- *  which the legacy expo-file-system API does not let us cancel directly. */3
-async function raceWithSignal<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
-  if (signal.aborted) throw signal.reason ?? new Error("aborted");
+ *  which the legacy expo-file-system API does not let us cancel directly. */
+async function raceWithSignal<T>(
+  work: Promise<T>,
+  signal: AbortSignal,
+  getAbortReason: () => Error,
+): Promise<T> {
+  if (signal.aborted) throw getAbortReason();
   return await new Promise<T>((resolve, reject) => {
-    const onAbort = () => reject(signal.reason ?? new Error("aborted"));
+    const onAbort = () => reject(getAbortReason());
     signal.addEventListener("abort", onAbort, { once: true });
     work.then(
       (v) => {
@@ -225,13 +229,18 @@ export async function fetchInstagramPost(
 
   // Combine the caller's signal (overlay dismiss) with a hard ceiling
   const ceiling = new AbortController();
+  let abortReason: Error = new InstagramImportCancelledError();
+  const abortWith = (reason: Error) => {
+    if (ceiling.signal.aborted) return;
+    abortReason = reason;
+    ceiling.abort();
+  };
   const timeoutId = setTimeout(
-    () => ceiling.abort(new InstagramImportTimeoutError()),
+    () => abortWith(new InstagramImportTimeoutError()),
     options?.timeoutMs ?? DEFAULT_TIMEOUT_MS,
   );
   const external = options?.signal;
-  const propagateExternal = () =>
-    ceiling.abort(external?.reason ?? new InstagramImportCancelledError());
+  const propagateExternal = () => abortWith(new InstagramImportCancelledError());
   if (external) {
     if (external.aborted) propagateExternal();
     else external.addEventListener("abort", propagateExternal, { once: true });
@@ -280,6 +289,7 @@ export async function fetchInstagramPost(
         },
       }),
       ceiling.signal,
+      () => abortReason,
     );
     if (download.status !== 200) {
       throw new Error(`Could not download the post image (HTTP ${download.status}).`);
@@ -299,9 +309,7 @@ export async function fetchInstagramPost(
       throw err;
     }
     if ((err as { name?: string } | null)?.name === "AbortError") {
-      const reason = ceiling.signal.reason;
-      if (reason instanceof InstagramImportTimeoutError) throw reason;
-      throw new InstagramImportCancelledError();
+      throw abortReason;
     }
     throw err;
   } finally {
