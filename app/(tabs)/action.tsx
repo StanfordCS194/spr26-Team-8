@@ -9,6 +9,7 @@ import { CHAT_PROMPTS, sendChatMessage } from "@/lib/chat";
 import { track } from "@/lib/posthog";
 import { removeSavedChatOutput, saveChatOutput, suggestSavedChatOutputTitle } from "@/lib/savedChatOutputs";
 import { Ionicons } from "@expo/vector-icons";
+import { useBottomTabBarHeight } from "@react-navigation/bottom-tabs";
 import { useFocusEffect } from "@react-navigation/native";
 import { router, useLocalSearchParams } from "expo-router";
 import { useCallback, useRef, useState } from "react";
@@ -119,6 +120,9 @@ export default function ActionTab() {
   const [savedMessageIds, setSavedMessageIds] = useState<Record<string, string>>({});
   const scrollRef = useRef<ScrollView>(null);
   const chatSessionId = useRef(`chat-${Date.now()}`).current;
+  // the keyboard-avoiding view doesn't know about the tab bar, so the input ends up tucked
+  // behind the keyboard. offsetting by the tab bar height lifts it the rest of the way
+  const tabBarHeight = useBottomTabBarHeight();
 
   const handleSaveMessage = useCallback((messageId: string, messageText: string) => {
     const existingSavedId = savedMessageIds[messageId];
@@ -359,6 +363,7 @@ export default function ActionTab() {
       <KeyboardAvoidingView
         className="flex-1 bg-[#F4F0EA]"
         behavior={Platform.OS === "ios" ? "padding" : undefined}
+        keyboardVerticalOffset={tabBarHeight}
       >
         <View className="flex-1 bg-[#F4F0EA]">
           <SafeAreaView className="flex-1 bg-[#F4F0EA]" edges={["left", "right", "bottom"]}>
