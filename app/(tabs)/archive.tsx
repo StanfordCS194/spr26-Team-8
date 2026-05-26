@@ -13,6 +13,11 @@ import {
   upsertSupplementalSearchText,
 } from "@/lib/archiveSupplementalSearchText";
 import { extractTextTemporalSignals } from "@/lib/extractTemporalFromUserText";
+import {
+  extractInstagramUrl,
+  fetchInstagramPost,
+  isInstagramUrl,
+} from "@/lib/instagramImport";
 import { checkImageContext, moderateContent } from "@/lib/moderation";
 import { fetchRemoteArchiveMeta, notifyArchiveIndexUpdated } from "@/lib/archiveBackendSync";
 import { fetchEmbeddingThemeOverrides } from "@/lib/embeddingThemes";
@@ -151,9 +156,17 @@ export default function ArchiveTab() {
   const [supplementalSearchById, setSupplementalSearchById] = useState<Record<string, string>>({});
   const [selectedItem, setSelectedItem] = useState<BoardItem | null>(null);
   const [pendingAsset, setPendingAsset] = useState<UploadAsset | null>(null);
+  // metadata about where a shared post came from. set when we import from instagram, cleared on confirm/cancel
+  const [pendingSourceMeta, setPendingSourceMeta] = useState<{
+    sourceUrl: string;
+    sourceAuthor: string | null;
+    sourcePlatform: string;
+  } | null>(null);
   const [captionDraft, setCaptionDraft] = useState("");
   const [intentDraft, setIntentDraft] = useState("");
   const [isUploading, setIsUploading] = useState(false);
+  // true while we're fetching a shared instagram post in the background, before the modal opens
+  const [isImportingShare, setIsImportingShare] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [isSavingCaption, setIsSavingCaption] = useState(false);
   const [viewerCaptionDraft, setViewerCaptionDraft] = useState("");
@@ -186,24 +199,86 @@ export default function ArchiveTab() {
   useEffect(() => {
     if (!resolvedSharedPayloads.length) return;
 
+    // straight image share, e.g. share from Photos. open the modal right away
     const sharedImageUris = resolvedSharedPayloads
       .filter((payload) => payload.contentType === "image" && payload.contentUri)
       .map((payload) => payload.contentUri)
       .filter((uri): uri is string => typeof uri === "string");
 
-    if (!sharedImageUris.length) return;
+    if (sharedImageUris.length > 0) {
+      const uri = sharedImageUris[0];
+      clearSharedPayloads();
+      void refreshSharePayloads();
 
-    const uri = sharedImageUris[0];
+      setPendingAsset({
+        uri,
+        fileName: uri.split("/").pop() ?? `shared-${Date.now()}.jpg`,
+        mimeType: "image/jpeg",
+      });
+      setPendingSourceMeta(null);
+      setCaptionDraft("");
+      setIntentDraft("");
+      return;
+    }
+
+    // URL / text share. instagram is the only one we know how to process today, but we still
+    // scan text shares for an instagram URL because iOS sometimes hands us "Look at this https://..."
+    const sharedUrl = (() => {
+      for (const payload of resolvedSharedPayloads) {
+        if (payload.contentType === "website" && payload.contentUri) {
+          return payload.contentUri;
+        }
+        // text payloads carry the value on the unresolved field
+        if (!payload.contentType || payload.contentType === "text") {
+          const candidate = payload.value ?? "";
+          const found = extractInstagramUrl(candidate) ?? (isInstagramUrl(candidate) ? candidate : null);
+          if (found) return found;
+        }
+      }
+      return null;
+    })();
+
+    if (!sharedUrl) return;
+
     clearSharedPayloads();
     void refreshSharePayloads();
 
-    setPendingAsset({
-      uri,
-      fileName: uri.split("/").pop() ?? `shared-${Date.now()}.jpg`,
-      mimeType: "image/jpeg",
-    });
-    setCaptionDraft("");
-    setIntentDraft("");
+    if (!isInstagramUrl(sharedUrl)) {
+      Alert.alert(
+        "Share",
+        "Venn can only import Instagram posts from a shared link right now.",
+      );
+      return;
+    }
+
+    setIsImportingShare(true);
+    void (async () => {
+      try {
+        const imported = await fetchInstagramPost(sharedUrl);
+        setPendingAsset({
+          uri: imported.localUri,
+          fileName: imported.fileName,
+          mimeType: imported.mimeType,
+        });
+        setPendingSourceMeta({
+          sourceUrl: imported.sourceUrl,
+          sourceAuthor: imported.author,
+          sourcePlatform: "instagram",
+        });
+        // pre-fill the caption with whatever IG gave us. user can edit before saving
+        setCaptionDraft(imported.caption);
+        setIntentDraft("");
+      } catch (err) {
+        Alert.alert(
+          "Instagram",
+          err instanceof Error
+            ? err.message
+            : "Could not import this Instagram post.",
+        );
+      } finally {
+        setIsImportingShare(false);
+      }
+    })();
   }, [clearSharedPayloads, refreshSharePayloads, resolvedSharedPayloads]);
 
   const loadItems = useCallback(async () => {
@@ -494,7 +569,9 @@ export default function ArchiveTab() {
     if (!pendingAsset) return;
     const asset = pendingAsset;
     const wantToDoSaved = intentDraft.trim();
+    const sourceMeta = pendingSourceMeta;
     setPendingAsset(null);
+    setPendingSourceMeta(null);
     setCaptionDraft("");
     setIntentDraft("");
     setIsUploading(true);
@@ -620,6 +697,28 @@ export default function ArchiveTab() {
           .eq("memory_id", memoryRow.memory_id);
         if (__DEV__ && intentErr && !isUndefinedColumnError(intentErr, "want_to_do")) {
           console.warn("[archive] could not save want_to_do:", intentErr.message);
+        }
+      }
+
+      // stash the IG link/author so we can show provenance later. defensive in case the migration
+      // hasn't run yet on this environment, same pattern as want_to_do above
+      if (sourceMeta) {
+        const { error: sourceErr } = await supabase
+          .from("memories")
+          .update({
+            source_url: sourceMeta.sourceUrl,
+            source_author: sourceMeta.sourceAuthor,
+            source_platform: sourceMeta.sourcePlatform,
+          })
+          .eq("memory_id", memoryRow.memory_id);
+        if (
+          __DEV__ &&
+          sourceErr &&
+          !isUndefinedColumnError(sourceErr, "source_url") &&
+          !isUndefinedColumnError(sourceErr, "source_author") &&
+          !isUndefinedColumnError(sourceErr, "source_platform")
+        ) {
+          console.warn("[archive] could not save source metadata:", sourceErr.message);
         }
       }
 
@@ -1177,11 +1276,29 @@ export default function ArchiveTab() {
         </Modal>
 
         <Modal
+          visible={isImportingShare}
+          transparent
+          animationType="fade"
+          onRequestClose={() => {
+            // user cancelled, but we can't actually abort the fetch. just hide the overlay
+            setIsImportingShare(false);
+          }}
+        >
+          <View className="flex-1 items-center justify-center bg-black/40">
+            <View className="rounded-2xl bg-white px-6 py-5">
+              <Text className="text-base font-black text-black">Importing post…</Text>
+              <Text className="mt-1 text-xs text-[#6B6B6B]">Fetching image and caption</Text>
+            </View>
+          </View>
+        </Modal>
+
+        <Modal
           visible={!!pendingAsset}
           transparent
           animationType="slide"
           onRequestClose={() => {
             setPendingAsset(null);
+            setPendingSourceMeta(null);
             setCaptionDraft("");
             setIntentDraft("");
           }}
@@ -1191,6 +1308,7 @@ export default function ArchiveTab() {
               className="flex-1"
               onPress={() => {
                 setPendingAsset(null);
+                setPendingSourceMeta(null);
                 setCaptionDraft("");
                 setIntentDraft("");
               }}
@@ -1202,6 +1320,12 @@ export default function ArchiveTab() {
                   style={{ width: "100%", height: 120, borderRadius: 12, marginBottom: 16 }}
                   contentFit="cover"
                 />
+              ) : null}
+              {pendingSourceMeta ? (
+                <Text className="mb-3 text-xs text-[#6B6B6B]">
+                  From {pendingSourceMeta.sourceAuthor ? `@${pendingSourceMeta.sourceAuthor}` : "Instagram"}
+                  {pendingSourceMeta.sourceAuthor ? " on Instagram" : ""}
+                </Text>
               ) : null}
               <Text className="mb-2 text-base font-black text-black">Add a caption</Text>
               <View className="mb-4 rounded-2xl border border-gray-200 px-4 pb-3 pt-2">
@@ -1253,6 +1377,7 @@ export default function ArchiveTab() {
                 <Pressable
                   onPress={() => {
                     setPendingAsset(null);
+                    setPendingSourceMeta(null);
                     setCaptionDraft("");
                     setIntentDraft("");
                   }}

@@ -53,13 +53,16 @@
             "enabled": true,
             "appGroupIdentifier": "group.com.cheetahspeed.Venn",
             "activationRule": {
-              "supportsImageWithMaxCount": 5
+              "supportsImageWithMaxCount": 5,
+              "supportsWebUrlWithMaxCount": 1,
+              "supportsText": true
             }
           },
           "android": {
             "enabled": true,
             "singleShareMimeTypes": [
-              "image/*"
+              "image/*",
+              "text/plain"
             ],
             "multipleShareMimeTypes": [
               "image/*"
