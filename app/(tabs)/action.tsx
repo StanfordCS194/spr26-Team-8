@@ -6,6 +6,12 @@ import {
   relatedThumbnailsForMessageText,
 } from "@/lib/fetchMemoryThumbnailUrls";
 import { CHAT_PROMPTS, sendChatMessage } from "@/lib/chat";
+import {
+  type EventDraft,
+  extractEventDraft,
+  looksSchedulable,
+  openEventInCalendar,
+} from "@/lib/chatCalendar";
 import { track } from "@/lib/posthog";
 import { removeSavedChatOutput, saveChatOutput, suggestSavedChatOutputTitle } from "@/lib/savedChatOutputs";
 import { Ionicons } from "@expo/vector-icons";
@@ -30,6 +36,8 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
+type EventDraftState = "loading" | EventDraft | null;
+
 type ChatMessage = {
   id: string;
   role: "user" | "assistant";
@@ -37,6 +45,8 @@ type ChatMessage = {
   imageUris?: string[];
   /** Library thumbnails when the reply overlaps saved memory OCR/captions */
   relatedLibraryImages?: RelatedMemoryThumbnail[];
+  /** Extracted calendar draft for assistant bubbles; "loading" while we're asking the model. */
+  eventDraft?: EventDraftState;
 };
 type SelectedImage = {
   uri: string;
@@ -171,15 +181,34 @@ export default function ActionTab() {
       role: "user" | "assistant",
       text: string,
       imageUris?: string[],
-      relatedLibraryImages?: RelatedMemoryThumbnail[]
+      relatedLibraryImages?: RelatedMemoryThumbnail[],
+      eventDraft?: EventDraftState
     ): ChatMessage => ({
       id: `${role}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       role,
       text,
       imageUris,
       ...(relatedLibraryImages?.length ? { relatedLibraryImages } : {}),
+      ...(eventDraft !== undefined ? { eventDraft } : {}),
     }),
     []
+  );
+
+  const handleOpenInCalendar = useCallback(
+    async (msg: ChatMessage) => {
+      const draft = msg.eventDraft;
+      if (!draft || draft === "loading") return;
+      const outcome = await openEventInCalendar(draft);
+      track("chat_response_calendar_drafted", {
+        chat_session_id: chatSessionId,
+        message_id: msg.id,
+        outcome,
+      });
+      if (outcome === "error") {
+        Alert.alert("Calendar", "Could not open the calendar event editor.");
+      }
+    },
+    [chatSessionId]
   );
 
   const appendExchange = useCallback(
@@ -234,16 +263,38 @@ export default function ActionTab() {
           for (const thumb of relatedLibraryImages) {
             usedMemoryIdsThisReply.add(thumb.memoryId);
           }
-          setMessages((m) => [
-            ...m,
-            makeMessage(
-              "assistant",
-              text,
-              undefined,
-              relatedLibraryImages.length > 0 ? relatedLibraryImages : undefined
-            ),
-          ]);
+          const schedulable = looksSchedulable(trimmed, text);
+          const draftMessage = makeMessage(
+            "assistant",
+            text,
+            undefined,
+            relatedLibraryImages.length > 0 ? relatedLibraryImages : undefined,
+            schedulable ? "loading" : undefined
+          );
+          setMessages((m) => [...m, draftMessage]);
           requestAnimationFrame(() => scrollRef.current?.scrollToEnd({ animated: true }));
+
+          if (schedulable) {
+            void extractEventDraft(trimmed, text)
+              .then((draft) => {
+                setMessages((m) =>
+                  m.map((existing) =>
+                    existing.id === draftMessage.id
+                      ? { ...existing, eventDraft: draft ?? null }
+                      : existing
+                  )
+                );
+              })
+              .catch(() => {
+                setMessages((m) =>
+                  m.map((existing) =>
+                    existing.id === draftMessage.id
+                      ? { ...existing, eventDraft: null }
+                      : existing
+                  )
+                );
+              });
+          }
         }
       } catch (err) {
         setMessages((m) => [
@@ -447,7 +498,26 @@ export default function ActionTab() {
                         <AssistantMessageBody content={msg.text} />
                         <RelatedLibraryPhotos items={msg.relatedLibraryImages ?? []} />
                       </View>
-                      <View className="mt-2 flex-row justify-end gap-1">
+                      <View className="mt-2 flex-row items-center justify-end gap-1">
+                        {msg.eventDraft === "loading" ? (
+                          <View
+                            accessibilityRole="text"
+                            accessibilityLabel="Preparing calendar draft"
+                            className="h-8 w-8 items-center justify-center rounded-full"
+                          >
+                            <ActivityIndicator size="small" color="#8A8278" />
+                          </View>
+                        ) : msg.eventDraft ? (
+                          <Pressable
+                            accessibilityRole="button"
+                            accessibilityLabel="Add to calendar"
+                            hitSlop={8}
+                            onPress={() => void handleOpenInCalendar(msg)}
+                            className="h-8 w-8 items-center justify-center rounded-full active:bg-[#F0EBE3]"
+                          >
+                            <Ionicons name="calendar-outline" size={16} color="#0B7AEE" />
+                          </Pressable>
+                        ) : null}
                         <Pressable
                           accessibilityRole="button"
                           accessibilityLabel="Copy chat output"
