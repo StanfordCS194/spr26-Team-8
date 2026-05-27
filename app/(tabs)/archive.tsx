@@ -16,6 +16,8 @@ import { extractTextTemporalSignals } from "@/lib/extractTemporalFromUserText";
 import {
   extractInstagramUrl,
   fetchInstagramPost,
+  InstagramImportCancelledError,
+  InstagramImportTimeoutError,
   isInstagramUrl,
 } from "@/lib/instagramImport";
 import { checkImageContext, moderateContent } from "@/lib/moderation";
@@ -167,6 +169,8 @@ export default function ArchiveTab() {
   const [isUploading, setIsUploading] = useState(false);
   // true while we're fetching a shared instagram post in the background, before the modal opens
   const [isImportingShare, setIsImportingShare] = useState(false);
+  // AbortController wires the importing-overlay dismiss button to the in-flight IG fetch
+  const importAbortRef = useRef<AbortController | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
   const [isSavingCaption, setIsSavingCaption] = useState(false);
   const [viewerCaptionDraft, setViewerCaptionDraft] = useState("");
@@ -238,10 +242,16 @@ export default function ArchiveTab() {
       return null;
     })();
 
-    if (!sharedUrl) return;
-
     clearSharedPayloads();
     void refreshSharePayloads();
+
+    if (!sharedUrl) {
+      Alert.alert(
+        "Share",
+        "Venn can only import Instagram posts from a shared link right now.",
+      );
+      return;
+    }
 
     if (!isInstagramUrl(sharedUrl)) {
       Alert.alert(
@@ -251,10 +261,12 @@ export default function ArchiveTab() {
       return;
     }
 
+    const controller = new AbortController();
+    importAbortRef.current = controller;
     setIsImportingShare(true);
     void (async () => {
       try {
-        const imported = await fetchInstagramPost(sharedUrl);
+        const imported = await fetchInstagramPost(sharedUrl, { signal: controller.signal });
         setPendingAsset({
           uri: imported.localUri,
           fileName: imported.fileName,
@@ -269,17 +281,35 @@ export default function ArchiveTab() {
         setCaptionDraft(imported.caption);
         setIntentDraft("");
       } catch (err) {
-        Alert.alert(
-          "Instagram",
-          err instanceof Error
-            ? err.message
-            : "Could not import this Instagram post.",
-        );
+        // User-cancel from the overlay backdrop is intentional — no alert. Timeout deserves a
+        // distinct message so the user knows it wasn't their fault. Everything else falls
+        // through to the existing generic error path.
+        if (err instanceof InstagramImportCancelledError) {
+          // intentional silent dismiss
+        } else if (err instanceof InstagramImportTimeoutError) {
+          Alert.alert("Instagram", "Instagram took too long to respond. Try again.");
+        } else {
+          Alert.alert(
+            "Instagram",
+            err instanceof Error
+              ? err.message
+              : "Could not import this Instagram post.",
+          );
+        }
       } finally {
-        setIsImportingShare(false);
+        if (importAbortRef.current === controller) {
+          importAbortRef.current = null;
+          setIsImportingShare(false);
+        }
       }
     })();
   }, [clearSharedPayloads, refreshSharePayloads, resolvedSharedPayloads]);
+
+  const cancelInFlightInstagramImport = useCallback(() => {
+    importAbortRef.current?.abort();
+    importAbortRef.current = null;
+    setIsImportingShare(false);
+  }, []);
 
   const loadItems = useCallback(async () => {
     try {
@@ -1279,17 +1309,19 @@ export default function ArchiveTab() {
           visible={isImportingShare}
           transparent
           animationType="fade"
-          onRequestClose={() => {
-            // user cancelled, but we can't actually abort the fetch. just hide the overlay
-            setIsImportingShare(false);
-          }}
+          onRequestClose={cancelInFlightInstagramImport}
         >
-          <View className="flex-1 items-center justify-center bg-black/40">
-            <View className="rounded-2xl bg-white px-6 py-5">
+          {/* tappable backdrop — aborts the in-flight IG fetch so iOS users can recover from
+              a slow/hung response without force-quitting. tap on the inner card is a no-op. */}
+          <Pressable
+            className="flex-1 items-center justify-center bg-black/40"
+            onPress={cancelInFlightInstagramImport}
+          >
+            <Pressable onPress={() => {}} className="rounded-2xl bg-white px-6 py-5">
               <Text className="text-base font-black text-black">Importing post…</Text>
-              <Text className="mt-1 text-xs text-[#6B6B6B]">Fetching image and caption</Text>
-            </View>
-          </View>
+              <Text className="mt-1 text-xs text-[#6B6B6B]">Tap outside to cancel</Text>
+            </Pressable>
+          </Pressable>
         </Modal>
 
         <Modal

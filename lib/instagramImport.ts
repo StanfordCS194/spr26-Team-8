@@ -9,6 +9,9 @@
 //   - Private accounts / login-wall pages return a generic IG og:image and no caption. We treat
 //     that as a soft failure so the user gets a useful error.
 //   - Stories aren't shareable to third-party apps, so we never see them.
+//   - QA note: non-residential IPs (datacenters, some VPNs) get login-walled even for public
+//     posts, so the importer can surface intermittent "private or unavailable" errors during
+//     dev. From real mobile carrier / residential IPs this is rare but nonzero.
 //
 // We pretend to be a desktop browser. Instagram returns a stripped page (no og tags) when the
 // User-Agent looks like a mobile app or a known scraper.
@@ -44,7 +47,10 @@ export function extractInstagramUrl(text: string): string | null {
   const match = text.match(
     /(https?:\/\/(?:www\.|m\.)?instagram\.com\/(?:p|reel|reels|tv)\/[A-Za-z0-9_-]+[^\s]*)/i,
   );
-  return match ? match[1] : null;
+  if (!match) return null;
+  // Trim paired/list punctuation that wraps autolinks in shared text (Messages, Slack,
+  // Markdown). Trailing "." is fine — new URL() collapses it into the path automatically.
+  return match[1].replace(/[>)\]},;]+$/, "");
 }
 
 // Strip share tracking (?igsh=, ?utm_*) and normalize trailing slash so we can dedupe later.
@@ -130,7 +136,6 @@ function sanitizeCaption(s: string): string {
       // zero-width spaces / joiners / non-joiners / BOM. IG uses these for layout tricks
       .replace(/[​-‍﻿]/g, "")
       // strip control chars but keep \n and \t
-      // eslint-disable-next-line no-control-regex
       .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, "")
       // normalize windows line endings
       .replace(/\r\n?/g, "\n")
@@ -142,9 +147,9 @@ function sanitizeCaption(s: string): string {
       .split("\n")
       .map((line) => line.trimEnd())
       .join("\n")
-      // IG truncates around 150 chars and appends "..." or "…". the user will edit if they want
-      // more, so chop the trailing ellipsis off so the caption doesn't end mid-thought with dots
-      .replace(/[.…]+\s*$/g, "")
+      // IG truncates around 150 chars and appends "..." or "…". Strip only multi-char ellipses
+      // so legitimately-finished sentences keep their lone trailing period.
+      .replace(/(?:…+|\.{2,})\s*$/g, "")
       .trim()
   );
 }
@@ -152,8 +157,10 @@ function sanitizeCaption(s: string): string {
 // og:description looks like: `1,234 likes, 56 comments - username on October 1, 2023: "Caption..."`
 // We pull out the caption from the quoted tail when possible, and the @handle from "username on".
 function parseDescription(desc: string): { caption: string; author: string | null } {
-  // pull the quoted caption tail
-  const quoted = desc.match(/[:\-]\s*"([^"]*)"\s*\.?\s*$/);
+  // Anchor from the parsed date and greedily consume to the final `"` at end-of-string. 
+  const quoted = desc.match(
+    /[A-Z][a-z]+\s+\d{1,2},?\s+\d{4}\s*:\s*"([\s\S]*)"\s*\.?\s*$/,
+  );
   // username is the word immediately before " on <date>"
   const authorMatch = desc.match(/([A-Za-z0-9._]+)\s+on\s+[A-Z][a-z]+\s+\d{1,2},?\s+\d{4}/);
   const rawCaption = quoted ? quoted[1] : stripLikesPrefix(desc);
@@ -171,58 +178,142 @@ function parseAuthorFromTitle(title: string): string | null {
   return m ? m[1] : null;
 }
 
-export async function fetchInstagramPost(rawUrl: string): Promise<InstagramImportResult> {
+/** Sentinel thrown when our timeout fires; callers can branch the user-visible message on it. */
+export class InstagramImportTimeoutError extends Error {
+  constructor(message = "Instagram took too long to respond.") {
+    super(message);
+    this.name = "InstagramImportTimeoutError";
+  }
+}
+
+/** Sentinel thrown when an external AbortSignal (e.g. the user dismissing the overlay) fires. */
+export class InstagramImportCancelledError extends Error {
+  constructor(message = "Instagram import cancelled.") {
+    super(message);
+    this.name = "InstagramImportCancelledError";
+  }
+}
+
+const DEFAULT_TIMEOUT_MS = 20_000;
+
+/** Race a non-cancellable promise against an AbortSignal. The underlying work may continue in
+ *  the background after we throw; callers must tolerate that. Used for FileSystem.downloadAsync
+ *  which the legacy expo-file-system API does not let us cancel directly. */
+async function raceWithSignal<T>(
+  work: Promise<T>,
+  signal: AbortSignal,
+  getAbortReason: () => Error,
+): Promise<T> {
+  if (signal.aborted) throw getAbortReason();
+  return await new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(getAbortReason());
+    signal.addEventListener("abort", onAbort, { once: true });
+    work.then(
+      (v) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(v);
+      },
+      (e) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(e);
+      },
+    );
+  });
+}
+
+export async function fetchInstagramPost(
+  rawUrl: string,
+  options?: { signal?: AbortSignal; timeoutMs?: number },
+): Promise<InstagramImportResult> {
   const sourceUrl = canonicalizeInstagramUrl(rawUrl.trim());
 
-  // pretend to be a desktop browser, otherwise IG often returns a stripped page
-  const res = await fetch(sourceUrl, {
-    method: "GET",
-    headers: {
-      "User-Agent": DESKTOP_USER_AGENT,
-      Accept: "text/html,application/xhtml+xml",
-      "Accept-Language": "en-US,en;q=0.9",
-    },
-  });
-  if (!res.ok) {
-    throw new Error(`Instagram returned HTTP ${res.status}`);
-  }
-  const html = await res.text();
-
-  const imageUrl = readMetaTag(html, "og:image");
-  if (!imageUrl) {
-    // typically means private / login-walled / removed
-    throw new Error("Could not read the post. It may be private or unavailable.");
-  }
-  const description = readMetaTag(html, "og:description") ?? "";
-  const title = readMetaTag(html, "og:title") ?? "";
-
-  const { caption, author: authorFromDesc } = parseDescription(description);
-  const author = authorFromDesc ?? parseAuthorFromTitle(title);
-
-  // pick a unique cache filename so concurrent shares don't clobber each other
-  const shortcode = sourceUrl.match(/\/(?:p|reel|reels|tv)\/([A-Za-z0-9_-]+)/)?.[1] ?? `${Date.now()}`;
-  const fileName = `instagram-${shortcode}-${Date.now()}.jpg`;
-  const cacheDir = FileSystem.cacheDirectory;
-  if (!cacheDir) throw new Error("No cache directory available for Instagram download.");
-  const localUri = `${cacheDir}${fileName}`;
-
-  // IG CDN sometimes 403s without a referer, so set one
-  const download = await FileSystem.downloadAsync(imageUrl, localUri, {
-    headers: {
-      "User-Agent": DESKTOP_USER_AGENT,
-      Referer: "https://www.instagram.com/",
-    },
-  });
-  if (download.status !== 200) {
-    throw new Error(`Could not download the post image (HTTP ${download.status}).`);
-  }
-
-  return {
-    localUri: download.uri,
-    fileName,
-    mimeType: "image/jpeg",
-    caption,
-    author,
-    sourceUrl,
+  // Combine the caller's signal (overlay dismiss) with a hard ceiling
+  const ceiling = new AbortController();
+  let abortReason: Error = new InstagramImportCancelledError();
+  const abortWith = (reason: Error) => {
+    if (ceiling.signal.aborted) return;
+    abortReason = reason;
+    ceiling.abort();
   };
+  const timeoutId = setTimeout(
+    () => abortWith(new InstagramImportTimeoutError()),
+    options?.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+  );
+  const external = options?.signal;
+  const propagateExternal = () => abortWith(new InstagramImportCancelledError());
+  if (external) {
+    if (external.aborted) propagateExternal();
+    else external.addEventListener("abort", propagateExternal, { once: true });
+  }
+
+  try {
+    // pretend to be a desktop browser, otherwise IG often returns a stripped page
+    const res = await fetch(sourceUrl, {
+      method: "GET",
+      headers: {
+        "User-Agent": DESKTOP_USER_AGENT,
+        Accept: "text/html,application/xhtml+xml",
+        "Accept-Language": "en-US,en;q=0.9",
+      },
+      signal: ceiling.signal,
+    });
+    if (!res.ok) {
+      throw new Error(`Instagram returned HTTP ${res.status}`);
+    }
+    const html = await res.text();
+
+    const imageUrl = readMetaTag(html, "og:image");
+    if (!imageUrl) {
+      // typically means private / login-walled / removed
+      throw new Error("Could not read the post. It may be private or unavailable.");
+    }
+    const description = readMetaTag(html, "og:description") ?? "";
+    const title = readMetaTag(html, "og:title") ?? "";
+
+    const { caption, author: authorFromDesc } = parseDescription(description);
+    const author = authorFromDesc ?? parseAuthorFromTitle(title);
+
+    // pick a unique cache filename so concurrent shares don't clobber each other
+    const shortcode = sourceUrl.match(/\/(?:p|reel|reels|tv)\/([A-Za-z0-9_-]+)/)?.[1] ?? `${Date.now()}`;
+    const fileName = `instagram-${shortcode}-${Date.now()}.jpg`;
+    const cacheDir = FileSystem.cacheDirectory;
+    if (!cacheDir) throw new Error("No cache directory available for Instagram download.");
+    const localUri = `${cacheDir}${fileName}`;
+
+    // IG CDN sometimes 403s without a referer, so set one
+    const download = await raceWithSignal(
+      FileSystem.downloadAsync(imageUrl, localUri, {
+        headers: {
+          "User-Agent": DESKTOP_USER_AGENT,
+          Referer: "https://www.instagram.com/",
+        },
+      }),
+      ceiling.signal,
+      () => abortReason,
+    );
+    if (download.status !== 200) {
+      throw new Error(`Could not download the post image (HTTP ${download.status}).`);
+    }
+
+    return {
+      localUri: download.uri,
+      fileName,
+      mimeType: "image/jpeg",
+      caption,
+      author,
+      sourceUrl,
+    };
+  } catch (err) {
+    // Normalize fetch's DOMException("AbortError") so caller can branch on user-cancel vs timeout without sniffing strings.
+    if (err instanceof InstagramImportTimeoutError || err instanceof InstagramImportCancelledError) {
+      throw err;
+    }
+    if ((err as { name?: string } | null)?.name === "AbortError") {
+      throw abortReason;
+    }
+    throw err;
+  } finally {
+    clearTimeout(timeoutId);
+    if (external) external.removeEventListener("abort", propagateExternal);
+  }
 }
