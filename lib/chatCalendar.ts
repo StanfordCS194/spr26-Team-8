@@ -10,7 +10,13 @@
  */
 
 const EXTRACT_MODEL = "gpt-4.1-mini";
-const EXTRACT_MAX_TOKENS = 220;
+const EXTRACT_MAX_TOKENS = 260;
+/** Tail of recent turns fed into extraction. Keeps prompt cheap but resolves "schedule it" → earlier "Saturday". */
+const HISTORY_TURN_LIMIT = 10;
+/** Per-turn truncation so a single long reply can't blow the prompt. */
+const HISTORY_PER_TURN_CHARS = 600;
+
+export type ChatTurn = { role: "user" | "assistant"; text: string };
 
 export type EventDraft = {
   title: string;
@@ -31,10 +37,21 @@ const SCHEDULABLE_PATTERNS: RegExp[] = [
   /\b\d{1,2}:\d{2}\b/,
   /\b(today|tonight|tomorrow|this (?:weekend|week|morning|afternoon|evening|saturday|sunday|monday|tuesday|wednesday|thursday|friday))\b/i,
   /\b(next (?:week|month|monday|tuesday|wednesday|thursday|friday|saturday|sunday))\b/i,
+  /\b(great,? (?:let'?s|please) ?(?:schedule|book|do|plan)|sounds good,? schedule|do it|go ahead and (?:schedule|book|plan))\b/i,
 ];
 
-export function looksSchedulable(userText: string, assistantText: string): boolean {
-  const blob = `${userText}\n${assistantText}`.toLowerCase();
+/**
+ * Cheap pre-filter so we only burn an LLM call when the recent conversation looks event-like.
+ * Accepts the tail of the conversation (latest at the end) so phrases like "great, schedule it"
+ * still trigger even when the earlier turn was the one with the date.
+ */
+export function looksSchedulable(turns: ChatTurn[]): boolean {
+  if (!turns.length) return false;
+  const blob = turns
+    .slice(-HISTORY_TURN_LIMIT)
+    .map((t) => t.text)
+    .join("\n")
+    .toLowerCase();
   if (!blob.trim()) return false;
   return SCHEDULABLE_PATTERNS.some((re) => re.test(blob));
 }
@@ -86,10 +103,19 @@ function parseDraft(raw: unknown): EventDraft | null {
   };
 }
 
-export async function extractEventDraft(
-  userText: string,
-  assistantText: string
-): Promise<EventDraft | null> {
+function formatHistory(turns: ChatTurn[]): string {
+  const tail = turns.slice(-HISTORY_TURN_LIMIT);
+  return tail
+    .map((t) => {
+      const label = t.role === "user" ? "USER" : "ASSISTANT";
+      const body = t.text.replace(/\s+/g, " ").trim().slice(0, HISTORY_PER_TURN_CHARS);
+      return `${label}: ${body}`;
+    })
+    .join("\n");
+}
+
+export async function extractEventDraft(turns: ChatTurn[]): Promise<EventDraft | null> {
+  if (!turns.length) return null;
   const apiKey = process.env.EXPO_PUBLIC_OPENAI_API_KEY?.trim();
   if (!apiKey) return null;
 
@@ -99,19 +125,37 @@ export async function extractEventDraft(
   const nowLocal = now.toLocaleString(undefined, { dateStyle: "full", timeStyle: "short" });
 
   const system =
-    "You turn a short exchange between a user and a planning assistant into ONE actionable calendar event, " +
-    "or null if there is no concrete event to schedule. Pick a specific, editable time that makes sense " +
-    "(the user can change it). Prefer details the assistant or user mentioned; otherwise use reasonable defaults " +
-    "like tomorrow 6pm or this Saturday 10am.\n\n" +
-    "Return STRICT JSON only, matching this shape:\n" +
+    "You turn a recent chat conversation between a user and a planning assistant into ONE actionable " +
+    "calendar event, or null if there is nothing concrete to schedule. The result will pre-fill an " +
+    "editable native calendar draft; the user can adjust before saving.\n\n" +
+    "Rules:\n" +
+    " - Resolve relative date references across the whole conversation, not just the last turn. " +
+    "If the user said \"Saturday\" earlier and \"great, schedule it\" later, use that Saturday.\n" +
+    " - When no time-of-day is given, pick a sensible default for the activity:\n" +
+    "     hike / outdoor / nature / beach: weekend morning ~8\u201310am, duration 90\u2013120 min\n" +
+    "     brunch: weekend 10\u201311am, 75 min\n" +
+    "     lunch: weekday 12\u20131pm, 60 min\n" +
+    "     dinner / drinks: 6:30\u20138pm, 90 min\n" +
+    "     coffee / quick catch-up: weekday morning 9\u201310am or 3\u20134pm, 30\u201345 min\n" +
+    "     workout / gym / run: weekday 7am or 6pm, 60 min\n" +
+    "     doctor / dentist / appointment / meeting / call: weekday business hours 10am or 2pm, 30\u201360 min\n" +
+    "     movie / concert / show / event: evening 7\u20138pm, 120 min\n" +
+    "     birthday / party / hang / casual plan: weekend afternoon ~1pm, 120 min\n" +
+    "     unspecified leisure: upcoming Saturday 10am\n" +
+    " - Do NOT schedule outdoor or leisure activities Mon\u2013Fri 9am\u20135pm unless the conversation explicitly says weekday or work hours.\n" +
+    " - If a day was named without time (e.g. \"Saturday\"), keep that day, only choose the time.\n" +
+    " - Pick the next future occurrence in the user's local timezone.\n" +
+    " - location: include only if it appears verbatim in the conversation. notes: 1\u20132 short sentences summarizing the plan, or omit.\n" +
+    " - duration_minutes: integer between 15 and 240.\n\n" +
+    "Return STRICT JSON only:\n" +
     `{"event": {"title": string, "start_iso": ISO 8601 local time (e.g. 2026-05-28T19:00), ` +
-    `"duration_minutes": integer between 15 and 240, "location"?: string, "notes"?: string}}\n` +
-    `If there is nothing to schedule, return {"event": null}.`;
+    `"duration_minutes": integer 15\u2013240, "location"?: string, "notes"?: string}}\n` +
+    `If there is nothing concrete to schedule, return {"event": null}.`;
 
+  const history = formatHistory(turns);
   const user =
     `Now (user's local time): ${nowLocal} (${tz}); UTC: ${nowIso}.\n\n` +
-    `User said:\n"""${userText.slice(0, 1200)}"""\n\n` +
-    `Assistant said:\n"""${assistantText.slice(0, 2000)}"""`;
+    `Recent conversation (oldest first):\n${history}`;
 
   const body = {
     model: EXTRACT_MODEL,

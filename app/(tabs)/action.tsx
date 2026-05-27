@@ -7,6 +7,7 @@ import {
 } from "@/lib/fetchMemoryThumbnailUrls";
 import { CHAT_PROMPTS, sendChatMessage } from "@/lib/chat";
 import {
+  type ChatTurn,
   type EventDraft,
   extractEventDraft,
   looksSchedulable,
@@ -18,7 +19,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { useBottomTabBarHeight } from "@react-navigation/bottom-tabs";
 import { useFocusEffect } from "@react-navigation/native";
 import { router, useLocalSearchParams } from "expo-router";
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Image } from "expo-image";
 import { File } from "expo-file-system";
 import { ImageManipulator, SaveFormat } from "expo-image-manipulator";
@@ -130,6 +131,12 @@ export default function ActionTab() {
   const [savedMessageIds, setSavedMessageIds] = useState<Record<string, string>>({});
   const scrollRef = useRef<ScrollView>(null);
   const chatSessionId = useRef(`chat-${Date.now()}`).current;
+  // mirror of messages so async helpers (calendar extraction) read the latest history
+  // without forcing appendExchange's useCallback to re-create whenever messages change.
+  const messagesRef = useRef<ChatMessage[]>([]);
+  useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
   // the keyboard-avoiding view doesn't know about the tab bar, so the input ends up tucked
   // behind the keyboard. offsetting by the tab bar height lifts it the rest of the way
   const tabBarHeight = useBottomTabBarHeight();
@@ -254,6 +261,7 @@ export default function ActionTab() {
           : splitConvoBubbles(reply.text);
         const candidates = reply.memoryCandidates;
         const usedMemoryIdsThisReply = new Set<string>();
+        const bubblesSoFar: string[] = [];
         for (let i = 0; i < bubbles.length; i += 1) {
           if (i > 0) await new Promise((r) => setTimeout(r, 450));
           const text = bubbles[i];
@@ -263,7 +271,16 @@ export default function ActionTab() {
           for (const thumb of relatedLibraryImages) {
             usedMemoryIdsThisReply.add(thumb.memoryId);
           }
-          const schedulable = looksSchedulable(trimmed, text);
+          // Build the conversation history *including* the new user turn and the
+          // assistant bubbles produced in this same reply, so cross-turn references
+          // like "schedule it" can be resolved against earlier context.
+          const history: ChatTurn[] = [
+            ...messagesRef.current.map((m) => ({ role: m.role, text: m.text })),
+            { role: "user", text: trimmed },
+            ...bubblesSoFar.map((b) => ({ role: "assistant" as const, text: b })),
+            { role: "assistant", text },
+          ];
+          const schedulable = looksSchedulable(history);
           const draftMessage = makeMessage(
             "assistant",
             text,
@@ -272,10 +289,11 @@ export default function ActionTab() {
             schedulable ? "loading" : undefined
           );
           setMessages((m) => [...m, draftMessage]);
+          bubblesSoFar.push(text);
           requestAnimationFrame(() => scrollRef.current?.scrollToEnd({ animated: true }));
 
           if (schedulable) {
-            void extractEventDraft(trimmed, text)
+            void extractEventDraft(history)
               .then((draft) => {
                 setMessages((m) =>
                   m.map((existing) =>
