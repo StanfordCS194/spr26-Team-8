@@ -71,6 +71,12 @@
         }
       ],
       [
+        "expo-calendar",
+        {
+          "calendarPermission": "Venn opens a draft calendar event you can edit and save."
+        }
+      ],
+      [
         "expo-splash-screen",
         {
           "image": "./assets/images/splash-icon.png",
