@@ -1,6 +1,7 @@
 import { MarkdownishBoldLine, parseStructuredReply, splitConvoBubbles } from "@/components/MarkdownishBoldLine";
 import { RelatedLibraryPhotos } from "@/components/RelatedLibraryPhotos";
 import { copyChatOutput } from "@/lib/copyChatOutput";
+import { saveCalendarDraftContext } from "@/lib/calendarDraftContext";
 import {
   type RelatedMemoryThumbnail,
   relatedThumbnailsForMessageText,
@@ -15,6 +16,7 @@ import {
 } from "@/lib/chatCalendar";
 import { track } from "@/lib/posthog";
 import { removeSavedChatOutput, saveChatOutput, suggestSavedChatOutputTitle } from "@/lib/savedChatOutputs";
+import { supabase } from "@/lib/supabase";
 import { Ionicons } from "@expo/vector-icons";
 import { useBottomTabBarHeight } from "@react-navigation/bottom-tabs";
 import { useFocusEffect } from "@react-navigation/native";
@@ -206,6 +208,16 @@ export default function ActionTab() {
       const draft = msg.eventDraft;
       if (!draft || draft === "loading") return;
       const outcome = await openEventInCalendar(draft);
+      const { data: auth } = await supabase.auth.getUser();
+      const userId = auth.user?.id;
+      if (userId) {
+        void saveCalendarDraftContext({
+          userId,
+          draft,
+          outcome,
+          sourceMessageText: msg.text,
+        });
+      }
       track("chat_response_calendar_drafted", {
         chat_session_id: chatSessionId,
         message_id: msg.id,
