@@ -120,7 +120,7 @@ export async function fetchUserProfileContext(userId: string): Promise<string> {
   }
 
   const free = (profile as UserProfileRow | null)?.interests_freeform?.trim();
-  if (free) lines.push(`They also said: ${free}`);
+  if (free) lines.push(`Things they've been meaning to do: ${free}`);
 
   return lines.join("\n");
 }

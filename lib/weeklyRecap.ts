@@ -145,22 +145,26 @@ export async function generateWeeklyRecap(): Promise<{ bullets: string; week_anc
     "You write bite-sized weekly nudges for a mobile app called Venn.\n" +
     `Output EXACTLY ${WEEKLY_RECAP_LINE_COUNT} lines — no more, no less. Each line MUST start with '- '.\n` +
     "Tone: warm, concise, lightly playful (one tiny spark of personality — not cheesy, not corporate).\n" +
-    "Each line is ONE tight reminder (max ~11 words) of something they implied they want to do, try, book, buy, or revisit — from uploads or chat.\n" +
+    "Each line is ONE tight reminder (max ~11 words) of something they implied they want to do, try, book, buy, or revisit.\n" +
+    "Blend three context sources — uploads first for specificity, profile for background, chat for recent intent:\n" +
+    "  1) Recent uploads (want_to_do, captions, OCR) — anchor at least one line here when upload text exists.\n" +
+    "  2) User profile (Based in, signup image interests, things they've been meaning to do) — use for local framing and plausible next actions; include 1–2 profile-informed lines when uploads are sparse OR as a complementary angle (don't overweight — max ~1 profile-heavy line when uploads are rich).\n" +
+    "  3) Recent chat — same weight as profile for implied intent.\n" +
+    "Prefer activities near their Based in location unless uploads/chat name somewhere else.\n" +
     "In each line, wrap the concrete object/item of the action in double-asterisks for emphasis (exactly ONE bold span), like: - Book **dentist appointment**.\n" +
     "Do not bold the verb; bold the thing (place/item/task/name). Do not include more than one **bold** span per line.\n" +
     "Use vivid verbs and plain language. No ‘Dear user’, no lecture. No duplicate ideas.\n" +
     "When a nudge is clearly tied to ONE upload in the MEMORY_ID list (especially invites, RSVPs, events, deadlines, tickets, reservations, flights, shipping), put the tag immediately after the dash and a space:\n" +
     "- [memory:<the-uploads-MEMORY_ID-uuid>] RSVP for **wedding invite**\n" +
-    "Use ONLY MEMORY_ID values from the upload section — never invent an id. If the idea comes only from chat or matches no single memory, omit [memory:…].\n" +
-    "If context is thin, still output 3 lines: short honest guesses from what exists, and keep one line gently nudging them to add “I want to…” on Library uploads next time.\n" +
-    "That onboarding line (only that one) MUST use the tag right after '- ': '- [tip] …' so the app does not treat it as a chat task. Do not use [tip] on the other two lines.";
+    "Use ONLY MEMORY_ID values from the upload section — never invent an id. Put `[memory:…]` only at the line start; never mention memory ids, MEMORY_ID, or source-image references in the readable nudge text. If the idea comes only from chat, profile, or matches no single memory, omit [memory:…].\n" +
+    "If all context is thin, output 3 short honest guesses from profile interests/location/freeform; only then use one line with '- [tip] …' nudging them to add \"I want to…\" on Library uploads. Do not use [tip] on the other lines.";
 
   const profileBlock =
     (await fetchUserProfileContext(userId)).trim() ||
     "(no onboarding profile yet)";
 
   const userPayload =
-    `--- User profile (location + signup interests) ---\n${profileBlock}\n\n` +
+    `--- User profile (location + signup interests + optional "meaning to do" notes) ---\n${profileBlock}\n\n` +
     `--- Recent uploads / intents (captions & “want to”) ---\n${uploadsBlock}\n\n` +
     `--- Recent chat (oldest→newest) ---\n${chatBlock.slice(0, 12000)}`;
 

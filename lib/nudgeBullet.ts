@@ -1,6 +1,11 @@
-/** Optional prefix from weekly recap: `[memory:<uuid>] …` (stripped in UI). */
-const MEMORY_TAG_RE =
-  /^\[memory:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\]\s*/i;
+const UUID =
+  "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
+
+/** `[memory:<uuid>]`, `[memory/<uuid>]`, etc. — stripped from inbox display text. */
+const MEMORY_TAG_RE = new RegExp(`\\[memory[:/\\s-]*(${UUID})\\]`, "gi");
+
+/** Model sometimes leaks training labels into the nudge line. */
+const MEMORY_ID_LEAK_RE = new RegExp(`\\bMEMORY_ID:\\s*(${UUID})\\b`, "gi");
 
 /** Prefix for onboarding / meta lines (never sent to chat as a prompt). */
 const TIP_TAG_RE = /^\[tip\]\s*/i;
@@ -43,21 +48,36 @@ function stripListMarker(line: string): string {
     .trim();
 }
 
+function firstCapture(re: RegExp, text: string): string | null {
+  re.lastIndex = 0;
+  const m = re.exec(text);
+  return m?.[1] ?? null;
+}
+
+function stripMemoryArtifacts(text: string): string {
+  return text
+    .replace(MEMORY_TAG_RE, "")
+    .replace(MEMORY_ID_LEAK_RE, "")
+    .replace(/\(\s*\)/g, "")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
+
 /** Parse one recap line (with or without leading `- `) into display text + optional source memory. */
 export function parseNudgeBulletLine(rawLine: string): ParsedNudgeBullet {
   let rest = stripListMarker(rawLine);
-  let memoryId: string | null = null;
-  const mem = rest.match(MEMORY_TAG_RE);
-  if (mem) {
-    memoryId = mem[1];
-    rest = rest.slice(mem[0].length).trim();
-  }
+  const memoryId =
+    firstCapture(MEMORY_TAG_RE, rest) ?? firstCapture(MEMORY_ID_LEAK_RE, rest);
+
   let taggedMetaTip = false;
   const tip = rest.match(TIP_TAG_RE);
   if (tip) {
     taggedMetaTip = true;
     rest = rest.slice(tip[0].length).trim();
   }
+
+  rest = stripMemoryArtifacts(rest);
+
   return { memoryId, taggedMetaTip, displayLine: rest };
 }
 
