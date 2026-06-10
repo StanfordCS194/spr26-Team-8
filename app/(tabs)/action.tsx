@@ -6,13 +6,20 @@ import {
   relatedThumbnailsForMessageText,
 } from "@/lib/fetchMemoryThumbnailUrls";
 import { CHAT_PROMPTS, sendChatMessage } from "@/lib/chat";
+import {
+  type ChatTurn,
+  type EventDraft,
+  extractEventDraft,
+  looksSchedulable,
+  openEventInCalendar,
+} from "@/lib/chatCalendar";
 import { track } from "@/lib/posthog";
 import { removeSavedChatOutput, saveChatOutput, suggestSavedChatOutputTitle } from "@/lib/savedChatOutputs";
 import { Ionicons } from "@expo/vector-icons";
 import { useBottomTabBarHeight } from "@react-navigation/bottom-tabs";
 import { useFocusEffect } from "@react-navigation/native";
 import { router, useLocalSearchParams } from "expo-router";
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Image } from "expo-image";
 import { File } from "expo-file-system";
 import { ImageManipulator, SaveFormat } from "expo-image-manipulator";
@@ -30,6 +37,8 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
+type EventDraftState = "loading" | EventDraft | null;
+
 type ChatMessage = {
   id: string;
   role: "user" | "assistant";
@@ -37,6 +46,8 @@ type ChatMessage = {
   imageUris?: string[];
   /** Library thumbnails when the reply overlaps saved memory OCR/captions */
   relatedLibraryImages?: RelatedMemoryThumbnail[];
+  /** Extracted calendar draft for assistant bubbles; "loading" while we're asking the model. */
+  eventDraft?: EventDraftState;
 };
 type SelectedImage = {
   uri: string;
@@ -120,6 +131,12 @@ export default function ActionTab() {
   const [savedMessageIds, setSavedMessageIds] = useState<Record<string, string>>({});
   const scrollRef = useRef<ScrollView>(null);
   const chatSessionId = useRef(`chat-${Date.now()}`).current;
+  // mirror of messages so async helpers (calendar extraction) read the latest history
+  // without forcing appendExchange's useCallback to re-create whenever messages change.
+  const messagesRef = useRef<ChatMessage[]>([]);
+  useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
   // the keyboard-avoiding view doesn't know about the tab bar, so the input ends up tucked
   // behind the keyboard. offsetting by the tab bar height lifts it the rest of the way
   const tabBarHeight = useBottomTabBarHeight();
@@ -171,15 +188,39 @@ export default function ActionTab() {
       role: "user" | "assistant",
       text: string,
       imageUris?: string[],
-      relatedLibraryImages?: RelatedMemoryThumbnail[]
+      relatedLibraryImages?: RelatedMemoryThumbnail[],
+      eventDraft?: EventDraftState
     ): ChatMessage => ({
       id: `${role}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       role,
       text,
       imageUris,
       ...(relatedLibraryImages?.length ? { relatedLibraryImages } : {}),
+      ...(eventDraft !== undefined ? { eventDraft } : {}),
     }),
     []
+  );
+
+  const handleOpenInCalendar = useCallback(
+    async (msg: ChatMessage) => {
+      const draft = msg.eventDraft;
+      if (!draft || draft === "loading") return;
+      const outcome = await openEventInCalendar(draft);
+      track("chat_response_calendar_drafted", {
+        chat_session_id: chatSessionId,
+        message_id: msg.id,
+        outcome,
+      });
+      if (outcome === "permission_denied") {
+        Alert.alert(
+          "Calendar access needed",
+          "To add events to your calendar, enable access for Venn in Settings → Privacy & Security → Calendars."
+        );
+      } else if (outcome === "error") {
+        Alert.alert("Calendar", "Could not open the calendar event editor.");
+      }
+    },
+    [chatSessionId]
   );
 
   const appendExchange = useCallback(
@@ -225,6 +266,7 @@ export default function ActionTab() {
           : splitConvoBubbles(reply.text);
         const candidates = reply.memoryCandidates;
         const usedMemoryIdsThisReply = new Set<string>();
+        const bubblesSoFar: string[] = [];
         for (let i = 0; i < bubbles.length; i += 1) {
           if (i > 0) await new Promise((r) => setTimeout(r, 450));
           const text = bubbles[i];
@@ -234,16 +276,48 @@ export default function ActionTab() {
           for (const thumb of relatedLibraryImages) {
             usedMemoryIdsThisReply.add(thumb.memoryId);
           }
-          setMessages((m) => [
-            ...m,
-            makeMessage(
-              "assistant",
-              text,
-              undefined,
-              relatedLibraryImages.length > 0 ? relatedLibraryImages : undefined
-            ),
-          ]);
+          // Build the conversation history *including* the new user turn and the
+          // assistant bubbles produced in this same reply, so cross-turn references
+          // like "schedule it" can be resolved against earlier context.
+          const history: ChatTurn[] = [
+            ...messagesRef.current.map((m) => ({ role: m.role, text: m.text })),
+            { role: "user", text: trimmed },
+            ...bubblesSoFar.map((b) => ({ role: "assistant" as const, text: b })),
+            { role: "assistant", text },
+          ];
+          const schedulable = looksSchedulable(history);
+          const draftMessage = makeMessage(
+            "assistant",
+            text,
+            undefined,
+            relatedLibraryImages.length > 0 ? relatedLibraryImages : undefined,
+            schedulable ? "loading" : undefined
+          );
+          setMessages((m) => [...m, draftMessage]);
+          bubblesSoFar.push(text);
           requestAnimationFrame(() => scrollRef.current?.scrollToEnd({ animated: true }));
+
+          if (schedulable) {
+            void extractEventDraft(history)
+              .then((draft) => {
+                setMessages((m) =>
+                  m.map((existing) =>
+                    existing.id === draftMessage.id
+                      ? { ...existing, eventDraft: draft ?? null }
+                      : existing
+                  )
+                );
+              })
+              .catch(() => {
+                setMessages((m) =>
+                  m.map((existing) =>
+                    existing.id === draftMessage.id
+                      ? { ...existing, eventDraft: null }
+                      : existing
+                  )
+                );
+              });
+          }
         }
       } catch (err) {
         setMessages((m) => [
@@ -447,7 +521,26 @@ export default function ActionTab() {
                         <AssistantMessageBody content={msg.text} />
                         <RelatedLibraryPhotos items={msg.relatedLibraryImages ?? []} />
                       </View>
-                      <View className="mt-2 flex-row justify-end gap-1">
+                      <View className="mt-2 flex-row items-center justify-end gap-1">
+                        {msg.eventDraft === "loading" ? (
+                          <View
+                            accessibilityRole="text"
+                            accessibilityLabel="Preparing calendar draft"
+                            className="h-8 w-8 items-center justify-center rounded-full"
+                          >
+                            <ActivityIndicator size="small" color="#8A8278" />
+                          </View>
+                        ) : msg.eventDraft ? (
+                          <Pressable
+                            accessibilityRole="button"
+                            accessibilityLabel="Add to calendar"
+                            hitSlop={8}
+                            onPress={() => void handleOpenInCalendar(msg)}
+                            className="h-8 w-8 items-center justify-center rounded-full active:bg-[#F0EBE3]"
+                          >
+                            <Ionicons name="calendar-outline" size={16} color="#0B7AEE" />
+                          </Pressable>
+                        ) : null}
                         <Pressable
                           accessibilityRole="button"
                           accessibilityLabel="Copy chat output"
