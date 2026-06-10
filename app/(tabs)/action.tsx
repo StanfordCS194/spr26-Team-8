@@ -211,7 +211,12 @@ export default function ActionTab() {
         message_id: msg.id,
         outcome,
       });
-      if (outcome === "error") {
+      if (outcome === "permission_denied") {
+        Alert.alert(
+          "Calendar access needed",
+          "To add events to your calendar, enable access for Venn in Settings → Privacy & Security → Calendars."
+        );
+      } else if (outcome === "error") {
         Alert.alert("Calendar", "Could not open the calendar event editor.");
       }
     },

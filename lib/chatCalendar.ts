@@ -6,7 +6,7 @@
  *  - openEventInCalendar: opens the OS calendar event editor with the draft pre-filled
  *
  * All entry points are fail-soft: if anything goes wrong, callers get null / "error"
- * so the chat UI just hides the calendar button rather than crashing the message bubble.
+ * so the chat UI szjust hides the calendar button rather than crashing the message bubble.
  */
 
 const EXTRACT_MODEL = "gpt-4.1-mini";
@@ -27,7 +27,13 @@ export type EventDraft = {
   notes?: string;
 };
 
-export type OpenInCalendarOutcome = "saved" | "canceled" | "deleted" | "done" | "error";
+export type OpenInCalendarOutcome =
+  | "saved"
+  | "canceled"
+  | "deleted"
+  | "done"
+  | "permission_denied"
+  | "error";
 
 const SCHEDULABLE_PATTERNS: RegExp[] = [
   /\b(schedule|book|reserve|reschedul\w*|set up|add (?:to )?(?:my )?calendar|calendar invite|invite)\b/i,
@@ -210,6 +216,17 @@ export async function extractEventDraft(turns: ChatTurn[]): Promise<EventDraft |
 export async function openEventInCalendar(draft: EventDraft): Promise<OpenInCalendarOutcome> {
   try {
     const Calendar = await import("expo-calendar");
+
+    // On iOS 16, createEventInCalendarAsync does NOT auto-request permission, it just throws.
+    // Make the prompt explicit so the user gets the system dialog instead of a silent failure.
+    const current = await Calendar.getCalendarPermissionsAsync();
+    let granted = current.granted;
+    if (!granted && current.canAskAgain) {
+      const requested = await Calendar.requestCalendarPermissionsAsync();
+      granted = requested.granted;
+    }
+    if (!granted) return "permission_denied";
+
     const start = new Date(draft.startIso);
     if (Number.isNaN(start.getTime())) return "error";
     const end = new Date(start.getTime() + draft.durationMinutes * 60_000);
@@ -227,7 +244,10 @@ export async function openEventInCalendar(draft: EventDraft): Promise<OpenInCale
       return action;
     }
     return "done";
-  } catch {
+  } catch (err) {
+    if (__DEV__) {
+      console.warn("[openEventInCalendar] failed:", err);
+    }
     return "error";
   }
 }
